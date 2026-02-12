@@ -58,7 +58,7 @@ async function waitForOffscreenReady(tries = 60, delay = 100) {
   for (let i = 0; i < tries; i++) {
     try {
       const res = await chrome.runtime.sendMessage({ type: 'OFFSCREEN_PING' });
-      if (res?.ok) return true;
+      if (res?.ok&& res?.mlReady) return true;
     } catch {}
     await new Promise(r => setTimeout(r, delay));
   }
@@ -372,6 +372,8 @@ async function proxyToPrimaryFrame(tabId, innerMessage, timeoutMs = 2000) {
   });
 }
 
+const autofillActiveByTab = new Map();
+
 /* =================== Listener =================== */
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   (async () => {
@@ -427,7 +429,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         try {
           const tabId = sender?.tab?.id;
           const ctx = (tabId && jobCtxByTab.get(tabId)) || null;
-          const pick =  ctx?.first_canonical || ctx?.canonical || req.url ||  sender?.url || '';
+          const pick =  ctx?.first_canonical || ctx?.canonical || reqUrl ||  sender?.url || '';
           return canonicalJobUrl(pick);
         } catch { return canonicalJobUrl(reqUrl || sender?.url || ''); }
       }
@@ -464,7 +466,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         // Forward the payload (e.g. { action:'openSkillsPanel' } or { action:'getSkillMatchState' })
         const inner = (request.payload && typeof request.payload === 'object')
-          ? request.payload:{};
+         // ? request.payload:{};
           //: { action: request.targetAction || 'openSkillsPanel' };
 
         const resp = await proxyToPrimaryFrame(tabId, inner, request.timeoutMs || 2000);
@@ -472,12 +474,40 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return;
       }
       */
+      if (request?.action === "setAutofillActive") {
+        const tabId = sender?.tab?.id;
+        if( tabId != null){
+          autofillActiveByTab.set(tabId, !!request.active);
+          sendResponse({ ok: true });
+          return;
+        }
+      }
+      if (request?.action === "getAutofillActive" ) {
+        const tabId = sender?.tab?.id;
+        if(tabId != null){
+          sendResponse({ active: !!autofillActiveByTab.get(tabId) });
+          return;
+        }
+      }
       if (request.action === 'canonicalizeUrl') {
         const canonical = canonicalJobUrl(request.url || sender?.url || '');
         sendResponse?.({ canonical });
         return;
       }
+      if (request.action === 'JA_SHOW_ICON_TOP') {
+        const tabId = sender?.tab?.id;
+        if (!tabId) return;
+        // Forward to top frame only
+        chrome.tabs.sendMessage(tabId, { action: 'JA_RENDER_ICON_TOP', det: request.det }, { frameId: 0 })
+          .catch(() => {});
+      }
 
+      if (request.action === 'JA_REMOVE_ICON_TOP') {
+        const tabId = sender?.tab?.id;
+        if (!tabId) return;
+        chrome.tabs.sendMessage(tabId, { action: 'JA_REMOVE_ICON_TOP' }, { frameId: 0 })
+          .catch(() => {});
+      }
       // NEW: lock in first canonical seen when UI first appears
       if (request.action === 'noteFirstJobUrl') {
         const tabId = sender.tab?.id;
@@ -950,6 +980,95 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
         return;
       }
+      // 👇 NEW: Active-learning suggestions
+      if (request.type === 'ACTIVE_LEARNING_SUGGEST') {
+        try {
+          const batch = request.batch || [];
+          if (!batch.length) {
+            sendResponse({ ok: true, suggestions: [] });
+            return;
+          }
+
+          // Use your real backend path & client here
+          // Option A: apiClient
+          const { data } = await apiClient.post(
+            '/active-learning/suggest',
+            { questions: batch },
+            { withCredentials: true },
+          );
+          // Expect shape: { suggestions: [...] }
+          sendResponse({
+            ok: true,
+            suggestions: data?.suggestions || [],
+          });
+        } catch (e) {
+          console.error('ACTIVE_LEARNING_SUGGEST failed', e);
+          sendResponse({
+            ok: false,
+            error: e?.response?.data?.detail || e.message || 'active-learning suggest failed',
+          });
+        }
+        return;
+      }
+
+      // 👇 NEW: Gemma suggestions
+      if (request.type === 'GEMMA_SUGGEST') {
+        try {
+          const batch = request.batch || [];
+          if (!batch.length) {
+            sendResponse({ ok: true, items: [] });
+            return;
+          }
+
+          // Option A: apiClient
+          const { data } = await apiClient.post(
+            '/gemma/suggest',
+            { items: batch },
+            { withCredentials: true },
+          );
+
+          // Expect shape: { items: [...] }
+          sendResponse({
+            ok: true,
+            items: data?.items || [],
+          });
+        } catch (e) {
+          console.error('GEMMA_SUGGEST failed', e);
+          sendResponse({
+            ok: false,
+            error: e?.response?.data?.detail || e.message || 'gemma suggest failed',
+          });
+        }
+        return;
+      }
+
+      // 👇 NEW: Active-learning feedback
+      if (request.type === 'ACTIVE_LEARNING_FEEDBACK') {
+        try {
+          const feedback = request.feedback || [];
+          const userId = request.userId || null;
+
+          if (!feedback.length) {
+            sendResponse({ ok: true });
+            return;
+          }
+
+          await apiClient.post(
+            '/active-learning/feedback',
+            { feedback, user_id: userId },
+            { withCredentials: true },
+          );
+
+          sendResponse({ ok: true });
+        } catch (e) {
+          console.error('ACTIVE_LEARNING_FEEDBACK failed', e);
+          sendResponse({
+            ok: false,
+            error: e?.response?.data?.detail || e.message || 'active-learning feedback failed',
+          });
+        }
+        return;
+      }
     }
     catch (e) {
       console.error('Background listener error:', e);
@@ -957,7 +1076,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
   })();
   return true;
-});
+});     
 
 /* =================== Backend & resume helpers =================== */
 async function fetchDataFromBackend(){

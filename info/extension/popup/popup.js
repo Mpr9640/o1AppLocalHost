@@ -582,6 +582,7 @@ async function runAutofill() {
   try {
     const tab = await getActiveTab();
     const data = await new Promise((resolve) => { chrome.storage.local.get("autofillData", (r) => resolve(r.autofillData || null)); });
+    console.log('Data in popup:',data);
     const bundleURL = chrome.runtime.getURL("autofill.bundle.js");
     await chrome.scripting.executeScript({
       target: { tabId: tab.id, allFrames: true },
@@ -593,10 +594,10 @@ async function runAutofill() {
             if (module && typeof module.autofillInit === "function") {
               try { 
                 window.__JA_busyAutofill = true;
-                pauseDetections(7000); // quiet period while we interact
+                pauseDetections(250); // quiet period while we interact
                 module.autofillInit(token, data);
                 window.__JA_busyAutofill = false;
-                pauseDetections(400);  // small tail to let DOM settle 
+                pauseDetections(250);  // small tail to let DOM settle 
               } 
               catch (e) { console.error(e); }
             } else { console.error("Autofill Init export is not found."); }

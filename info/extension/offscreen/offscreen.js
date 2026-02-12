@@ -1,269 +1,356 @@
-// extension/offscreen/offscreen.js
+// offscreen.js
+// Offscreen ML handlers: bestMatch (embeddings), zero-shot, NER
+// Updated: mlReady ping handled in bootstrap; this file focuses on model logic.
 
-let tfm = null;
+import { env, pipeline } from '@xenova/transformers';
 
-async function getPipeline() {
-  if (!tfm) {
-    tfm = await import('@huggingface/transformers');
-    const { env } = tfm;
+// -------------------------
+// Small utilities
+// -------------------------
+const now = () => Date.now();
 
-    // 1) Point to local assets
-    env.backends.onnx.wasm.wasmPaths = chrome.runtime.getURL('offscreen/vendor/onnx/');
-
-    // 2) MV3-safe: no blob worker
-    env.backends.onnx.wasm.proxy = false;
-
-    // If you ship ALL variants (recommended), you may omit these two:
-    // env.backends.onnx.wasm.simd = true;     // let ONNX pick SIMD when available
-    // env.backends.onnx.wasm.numThreads = 2;  // or higher if you want
-    //
-    // If you want minimal files (plain only), force these:
-    // env.backends.onnx.wasm.simd = false;
-    // env.backends.onnx.wasm.numThreads = 1;
-
-    env.useBrowserCache = true;
-    env.allowLocalModels = false;
-  }
-  return tfm.pipeline;
+function norm(s) {
+  return (s || '')
+    .toString()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
-
-// --- the rest of your file stays the same ---
-let zsPromise = null;
-let nerPromise = null;
-let embedPromise = null;
-
-const EMBED_MODEL = 'Xenova/bge-small-en-v1.5';
-
-async function getZeroShot() {
-  if (!zsPromise) {
-    const pipeline = await getPipeline();
-    zsPromise = pipeline('zero-shot-classification', 'Xenova/mobilebert-uncased-mnli', {
-      quantized: true, use_cache: true, dtype: 'q8',
-    });
-  }
-  return zsPromise;
+function isDegreeish(ctx = {}) {
+  const h = norm(ctx.humanName || ctx.fieldName || '');
+  return /(degree|education|qualification|level|highest|school)/.test(h);
 }
-async function getNER() {
-  if (!nerPromise) {
-    const pipeline = await getPipeline();
-    nerPromise = pipeline('token-classification', 'chrisdepallan/ner-skills-distilbert', {
-      quantized: true, use_cache: true, dtype: 'q8',
-    });
-  }
-  return nerPromise;
+
+function dot(a, b) {
+  let s = 0;
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) s += a[i] * b[i];
+  return s;
 }
+
+// If vectors are normalized, cosine = dot. Still safe if slightly off.
+function cosine(a, b) {
+  if (!a || !b || !a.length || !b.length) return -1;
+  return dot(a, b);
+}
+
+function cheapTokenOverlap(a, b) {
+  const A = new Set(norm(a).split(' ').filter(Boolean));
+  const B = new Set(norm(b).split(' ').filter(Boolean));
+  if (!A.size || !B.size) return 0;
+  let inter = 0;
+  for (const t of A) if (B.has(t)) inter++;
+  return inter / Math.max(A.size, B.size);
+}
+
+function hashString(str) {
+  // simple fast hash (djb2-ish) good enough for cache keys
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) h = ((h << 5) + h) ^ str.charCodeAt(i);
+  return (h >>> 0).toString(16);
+}
+
+// -------------------------
+// LRU cache
+// -------------------------
+class LRU {
+  constructor(limit = 200) {
+    this.limit = limit;
+    this.map = new Map();
+  }
+  get(k) {
+    if (!this.map.has(k)) return undefined;
+    const v = this.map.get(k);
+    this.map.delete(k);
+    this.map.set(k, v);
+    return v;
+  }
+  set(k, v) {
+    if (this.map.has(k)) this.map.delete(k);
+    this.map.set(k, v);
+    if (this.map.size > this.limit) {
+      const first = this.map.keys().next().value;
+      this.map.delete(first);
+    }
+  }
+}
+
+// -------------------------
+// Model pipelines
+// -------------------------
+// Choose a good small embedding model.
+// You can swap to bge-small if you already have it packaged.
+// const EMBED_MODEL = 'Xenova/bge-small-en-v1.5';
+const EMBED_MODEL = 'Xenova/all-MiniLM-L6-v2';
+
+let embedPipePromise = null;
 async function getEmbedder() {
-  if (!embedPromise) {
-    const pipeline = await getPipeline();
-    embedPromise = pipeline('feature-extraction', EMBED_MODEL, {
-      quantized: true, use_cache: true, dtype: 'q8',
-    });
-  }
-  return embedPromise;
-}
+  if (embedPipePromise) return embedPipePromise;
 
-const timeout = (p, ms) => new Promise((res, rej) => {
-  let done = false;
-  const t = setTimeout(() => { if (!done) { done = true; rej(new Error('timeout')); } }, ms);
-  p.then(v => { if (done) return; clearTimeout(t); done = true; res(v); })
-   .catch(e => { if (done) return; clearTimeout(t); done = true; rej(e); });
-});
-
-const makeLRU = (cap=64) => {
-  const m = new Map();
-  return {
-    get(k){ if (!m.has(k)) return null; const v = m.get(k); m.delete(k); m.set(k, v); return v; },
-    set(k,v){ if (m.has(k)) m.delete(k); m.set(k,v); if (m.size>cap) m.delete(m.keys().next().value); }
-  };
-};
-const zsCache   = makeLRU(64);
-const nerCache  = makeLRU(64);
-const bestCache = makeLRU(64);
-
-function dot(a, b) { let s = 0; const n = Math.min(a.length, b.length); for (let i=0;i<n;i++) s += a[i]*b[i]; return s; }
-function cosine(a, b) { return dot(a, b); } // embeddings are normalized
-
-const norm = (s) => String(s || "")
-  .replace(/[_\-]+/g, " ")
-  .replace(/([a-z])([A-Z])/g, "$1 $2")
-  .toLowerCase()
-  .trim();
-
-export async function handleZeroShot({ text, labels, multi=false }) {
-  const key = JSON.stringify({ text: text?.slice(0,1600), labels, multi });
-  const cached = zsCache.get(key); if (cached) return { ok: true, data: cached };
-
-  const pipe = await getZeroShot();
-  const out = await timeout(pipe(text, labels, { multi_label: !!multi }), 2500);
-  zsCache.set(key, out);
-  return { ok: true, data: out };
-}
-
-export async function handleNER({ text }) {
-  const key = text?.slice(0,4000) || '';
-  const cached = nerCache.get(key); if (cached) return { ok: true, data: cached };
-
-  const pipe = await getNER();
-  const out = await timeout(pipe(key, { aggregation_strategy: 'simple' }), 3000);
-  nerCache.set(key, out);
-  return { ok: true, data: out };
-}
-// Replace your handleBestMatch with this version:
-
-export async function handleBestMatch({ labels = [], answer = '', method = 'auto' }) {
-  const q = JSON.stringify({ labels, answer, method });
-  const cached = bestCache.get(q); if (cached) return cached;
-
-  // Guard
-  if (!labels.length || !answer) {
-    const res = { ok: true, labelIndex: -1, score: 0, method: 'none' };
-    bestCache.set(q, res);
-    return res;
-  }
-
-  const normLabels = labels.map(norm);
-  const normAnswer = norm(answer);
-
-  // Helper: convert whatever transformers returns into a flat Float32Array
-  function toVec(x) {
+  embedPipePromise = (async () => {
+    // ONNX runtime wasm paths (your folder). Keep if you ship wasm assets.
     try {
-      if (!x) return null;
-      if (x instanceof Float32Array) return x;
-      if (Array.isArray(x)) return new Float32Array(x.flat(Infinity));
-      if (x.data instanceof Float32Array) return x.data;
-      if (Array.isArray(x.data)) return new Float32Array(x.data.flat?.(Infinity) ?? x.data);
-      if (x.tensor?.data instanceof Float32Array) return x.tensor.data;
-      if (Array.isArray(x.tensor?.data)) return new Float32Array(x.tensor.data.flat?.(Infinity) ?? x.tensor.data);
+      env.backends.onnx.wasm.wasmPaths = chrome.runtime.getURL('offscreen/vendor/onnx/');
     } catch {}
-    return null;
-  }
 
-  // Try embedding route (unless forced 'zs')
-  if (method !== 'zs') {
-    try {
-      const embed = await getEmbedder();
-      const out = await timeout(
-        embed([normAnswer, ...normLabels], { pooling: 'mean', normalize: true }),
-        3000
-      );
+    // IMPORTANT: allow local assets shipped with extension
+    env.allowLocalModels = true;
 
-      // transformers.js sometimes returns a single tensor, sometimes an array
-      const arr = Array.isArray(out) ? out : [out];
-      const ansVec = toVec(arr[0]);
-      const labelVecs = arr.slice(1).map(toVec).filter(Boolean);
+    // Cache can help, but real speed comes from our own caches.
+    env.useBrowserCache = true;
 
-      // Basic sanity
-      if (!ansVec || !labelVecs.length || !labelVecs[0]) {
-        // fall through to zero-shot
-      } else {
-        // Compute cosine
-        let bestIdx = -1, bestScore = -Infinity;
-        for (let i = 0; i < labelVecs.length; i++) {
-          const lv = labelVecs[i];
-          const n = Math.min(ansVec.length, lv.length);
-          let s = 0;
-          for (let j = 0; j < n; j++) s += ansVec[j] * lv[j];
-          if (s > bestScore) { bestScore = s; bestIdx = i; }
-        }
+    // Create pipeline
+    return await pipeline('feature-extraction', EMBED_MODEL, {
+      quantized: true,
+    });
+  })();
 
-        // If score looks valid and decent, return it
-        if (Number.isFinite(bestScore)) {
-          const res = {
-            ok: true,
-            labelIndex: bestScore >= 0.35 ? bestIdx : -1,
-            score: Number(bestScore),
-            method: 'embed'
-          };
-          // If below threshold, try zero-shot instead of giving up
-          if (res.labelIndex >= 0) { bestCache.set(q, res); return res; }
-          // else fall through to zero-shot
-        }
-      }
-    } catch (e) {
-      // ignore; we’ll try zero-shot
-    }
-  }
-  // Fallback / forced zero-shot route (slower, but robust)
-  try {
-    const pipe = await getZeroShot();
-    const out = await timeout(pipe(normAnswer, normLabels, { multi_label: false }), 3000);
-
-    // transformers.js returns labels & scores sorted desc by score
-    const bestLabel  = Array.isArray(out?.labels)  ? out.labels[0]  : null;
-    const bestScore  = Array.isArray(out?.scores)  ? out.scores[0]  : 0;
-    const bestIdxOri = bestLabel ? normLabels.indexOf(bestLabel) : -1;
-
-    const res = { ok: true,
-      labelIndex: (bestIdxOri >= 0 && bestScore >= 0.40) ? bestIdxOri : -1,
-      score: Number(bestScore || 0),
-      method: 'zs'
-    };
-    bestCache.set(q, res);
-    return res;
-  } catch (e) {
-    const res = { ok:false, error:`zs_failed: ${String(e?.message || e)}` };
-    bestCache.set(q, res);
-    return res;
-  }
-
+  return embedPipePromise;
 }
 
+// Optional: keep your existing ZS/NER if you use them.
+// Here we leave stubs if your bundle already implements them.
+// If you want, you can keep your original ZS/NER code under these.
+let zsPipePromise = null;
+async function getZeroShot() {
+  if (zsPipePromise) return zsPipePromise;
+  zsPipePromise = pipeline('zero-shot-classification', 'Xenova/mobilebert-uncased-mnli', { quantized:true });
+  return zsPipePromise;
+}
 
-/*export async function handleBestMatch({ labels = [], answer = '', method = 'auto' }) {
-  const q = JSON.stringify({ labels, answer, method });
-  const cached = bestCache.get(q); if (cached) return cached;
+let nerPipePromise = null;
+async function getNER() {
+  if (nerPipePromise) return nerPipePromise;
+  nerPipePromise = pipeline('token-classification', 'Xenova/bert-base-NER', { quantized:true });
+  return nerPipePromise;
+}
 
-  if (!labels.length || !answer) {
-    const res = { ok: true, labelIndex: -1, score: 0, method: 'none' };
-    bestCache.set(q, res);
-    return res;
+// -------------------------
+// Embedding output normalization
+// -------------------------
+function toVec(out) {
+  // Handles vec-like structures and tries to return Float32Array/Array<number>
+  if (!out) return null;
+  if (out instanceof Float32Array) return out;
+  if (Array.isArray(out) && typeof out[0] === 'number') return out;
+  const data = out?.data || out?.tensor?.data;
+  if (data instanceof Float32Array) return data;
+  return null;
+}
+
+function splitBatchVecs(out) {
+  // If already array of per-item outputs
+  if (Array.isArray(out)) {
+    const vecs = out.map(toVec).filter(Boolean);
+    if (vecs.length) return vecs;
   }
 
-  const normLabels = labels.map(norm);
+  // Tensor-like: dims = [B, D] and data is flat
+  const data = out?.data || out?.tensor?.data;
+  const dims = out?.dims || out?.tensor?.dims;
+
+  if (data instanceof Float32Array && Array.isArray(dims) && dims.length === 2) {
+    const [B, D] = dims;
+    const vecs = [];
+    for (let i = 0; i < B; i++) {
+      vecs.push(data.slice(i * D, (i + 1) * D));
+    }
+    return vecs;
+  }
+
+  // Fallback: try flatten into one vec
+  const v = toVec(out);
+  return v ? [v] : [];
+}
+
+// -------------------------
+// Caches for bestMatch
+// -------------------------
+// Cache answer embeddings by normAnswer
+const answerVecCache = new LRU(300);
+
+// Cache option-set embeddings by signature hash
+// value: { labelsNorm: string[], vecs: Float32Array[], ts: number }
+const labelSetCache = new LRU(120);
+
+// Cache final bestMatch results for exact request (optional micro-opt)
+const resultCache = new LRU(300);
+
+// -------------------------
+// Public handlers (called by bootstrap)
+// -------------------------
+export async function handleBestMatch(payload = {}) {
+  const labels = Array.isArray(payload.labels) ? payload.labels : [];
+  const answer = (payload.answer || '').toString();
+  const ctx = payload.ctx || {};
+  const forceMethod = payload.method || ''; // optional: 'embed' | 'zs'
+  const debug = !!payload.debug;
+
+  if (!labels.length || !answer.trim()) {
+    return { ok: false, error: 'missing_labels_or_answer' };
+  }
+
   const normAnswer = norm(answer);
+  const normLabels = labels.map(l => norm(l));
 
-  if (method !== 'zs') {
-    try {
-      const embed = await getEmbedder();
-      const data = await timeout(
-        embed([normAnswer, ...normLabels], { pooling: 'mean', normalize: true }),
-        2500
-      );
-      const vecs = Array.isArray(data) ? data : [data];
-      const ansVec = vecs[0];
-      const labelVecs = vecs.slice(1);
+  // Quick exact/contains before any ML
+  {
+    const exact = normLabels.findIndex(l => l === normAnswer);
+    if (exact >= 0) return { ok:true, labelIndex: exact, label: labels[exact], score: 1.0, method: 'exact' };
 
-      let bestIdx = -1, bestScore = -Infinity;
-      for (let i = 0; i < labelVecs.length; i++) {
-        const score = cosine(ansVec, labelVecs[i]);
-        if (score > bestScore) { bestScore = score; bestIdx = i; }
+    const contains = normLabels.findIndex(l => l.includes(normAnswer) || normAnswer.includes(l));
+    if (contains >= 0) return { ok:true, labelIndex: contains, label: labels[contains], score: 0.92, method: 'contains' };
+  }
+
+  // Result cache key
+  const cacheKey = `bm:${hashString(normLabels.join('\n'))}:${hashString(normAnswer)}:${isDegreeish(ctx) ? 'deg' : 'gen'}`;
+  const cached = resultCache.get(cacheKey);
+  if (cached) return cached;
+
+  // Thresholds (tune as needed)
+  const degree = isDegreeish(ctx);
+  const threshold = payload.threshold ?? (degree ? 0.70 : 0.78);
+
+  // Prefer embeddings by default
+  if (!forceMethod || forceMethod === 'embed') {
+    const r = await bestMatchByEmbeddings(normLabels, labels, normAnswer, ctx, { threshold, debug });
+    // If ok or confident fail (don’t pick), cache and return
+    resultCache.set(cacheKey, r);
+    return r;
+  }
+
+  // If explicitly forced zero-shot
+  if (forceMethod === 'zs') {
+    const r = await bestMatchByZeroShot(normLabels, labels, normAnswer, { threshold: Math.max(0.55, threshold - 0.1) });
+    resultCache.set(cacheKey, r);
+    return r;
+  }
+
+  return { ok:false, error:'unknown_method' };
+}
+
+async function bestMatchByEmbeddings(normLabels, rawLabels, normAnswer, ctx, { threshold, debug } = {}) {
+  const embed = await getEmbedder();
+
+  // 1) Answer vec
+  let ansVec = answerVecCache.get(normAnswer);
+  if (!ansVec) {
+    const out = await embed([normAnswer], { pooling: 'mean', normalize: true });
+    const vecs = splitBatchVecs(out);
+    ansVec = vecs[0];
+    if (ansVec) answerVecCache.set(normAnswer, ansVec);
+  }
+
+  if (!ansVec) {
+    return { ok:false, error:'answer_embedding_failed' };
+  }
+
+  // 2) Label set vecs (cached by signature)
+  const sig = hashString(normLabels.join('\n'));
+  let labelPack = labelSetCache.get(sig);
+
+  if (!labelPack || !labelPack.vecs || labelPack.vecs.length !== normLabels.length) {
+    const out = await embed(normLabels, { pooling: 'mean', normalize: true });
+    const vecs = splitBatchVecs(out);
+
+    // If model returns a single vec (shouldn't), bail
+    if (!vecs || vecs.length !== normLabels.length) {
+      return { ok:false, error:'label_embedding_failed', details:{ got: vecs?.length, want: normLabels.length } };
+    }
+
+    labelPack = { labelsNorm: normLabels, vecs, ts: now() };
+    labelSetCache.set(sig, labelPack);
+  }
+
+  // 3) Similarity scan
+  let bestI = -1;
+  let bestS = -Infinity;
+
+  for (let i = 0; i < labelPack.vecs.length; i++) {
+    const s = cosine(ansVec, labelPack.vecs[i]);
+    if (s > bestS) { bestS = s; bestI = i; }
+  }
+
+  // 4) Tie-break: if multiple close, use token overlap
+  // (Useful when options are short like "Masters", "Master's", etc.)
+  if (bestI >= 0) {
+    const close = [];
+    for (let i = 0; i < labelPack.vecs.length; i++) {
+      const s = cosine(ansVec, labelPack.vecs[i]);
+      if (bestS - s <= 0.03) close.push({ i, s });
+    }
+    if (close.length > 1) {
+      let tBest = close[0];
+      let tScore = -1;
+      for (const c of close) {
+        const t = cheapTokenOverlap(normAnswer, normLabels[c.i]);
+        if (t > tScore) { tScore = t; tBest = c; }
       }
-      const res = { ok: true, labelIndex: bestScore >= 0.40 ? bestIdx : -1, score: Number(bestScore || 0), method: 'embed' };
-      bestCache.set(q, res);
-      return res;
-    } catch (e) {
-      if (method === 'embed') {
-        const res = { ok:false, error:`embed_failed: ${String(e?.message || e)}` };
-        bestCache.set(q, res);
-        return res;
-      }
+      bestI = tBest.i;
+      bestS = tBest.s;
     }
   }
 
-  try {
-    const pipe = await getZeroShot();
-    const out = await timeout(pipe(normAnswer, normLabels, { multi_label: false }), 3000);
-    let bestIdx = -1, bestScore = 0;
-    if (out && Array.isArray(out.scores)) {
-      out.scores.forEach((s, i) => { if (s > bestScore) { bestScore = s; bestIdx = i; }});
-    }
-    const res = { ok: true, labelIndex: bestScore >= 0.40 ? bestIdx : -1, score: bestScore, method: 'zs' };
-    bestCache.set(q, res);
-    return res;
-  } catch (e) {
-    const res = { ok:false, error:`zs_failed: ${String(e?.message || e)}` };
-    bestCache.set(q, res);
-    return res;
+  // 5) Threshold guard
+  if (bestI < 0 || bestS < threshold) {
+    // Do NOT pick if below threshold
+    return {
+      ok: false,
+      labelIndex: -1,
+      score: bestS,
+      method: 'embed',
+      reason: 'below_threshold',
+      threshold,
+      debug: debug ? { bestS, threshold } : undefined
+    };
   }
-} */
+
+  return {
+    ok: true,
+    labelIndex: bestI,
+    label: rawLabels[bestI],
+    score: bestS,
+    method: 'embed'
+  };
+}
+
+async function bestMatchByZeroShot(normLabels, rawLabels, normAnswer, { threshold = 0.65 } = {}) {
+  // Zero-shot is slower and less reliable for dropdown matching.
+  // Only use when explicitly forced.
+  const zs = await getZeroShot();
+
+  const res = await zs(normAnswer, rawLabels, { multi_label: false });
+  // res.labels (sorted), res.scores (sorted)
+  if (!res || !Array.isArray(res.labels) || !Array.isArray(res.scores)) {
+    return { ok:false, error:'zs_failed' };
+  }
+
+  const bestLabel = res.labels[0];
+  const bestScore = res.scores[0] ?? 0;
+  const idx = rawLabels.findIndex(l => l === bestLabel);
+
+  if (idx < 0 || bestScore < threshold) {
+    return { ok:false, labelIndex:-1, score:bestScore, method:'zs', reason:'below_threshold', threshold };
+  }
+
+  return { ok:true, labelIndex: idx, label: rawLabels[idx], score: bestScore, method:'zs' };
+}
+
+export async function handleZeroShot(payload = {}) {
+  const text = (payload.text || '').toString();
+  const labels = Array.isArray(payload.labels) ? payload.labels : [];
+  if (!text || !labels.length) return { ok:false, error:'missing_text_or_labels' };
+  const zs = await getZeroShot();
+  const res = await zs(text, labels, payload.options || {});
+  return { ok:true, res };
+}
+
+export async function handleNER(payload = {}) {
+  const text = (payload.text || '').toString();
+  if (!text) return { ok:false, error:'missing_text' };
+  const ner = await getNER();
+  const res = await ner(text, payload.options || {});
+  return { ok:true, res };
+}

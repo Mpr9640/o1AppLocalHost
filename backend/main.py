@@ -26,7 +26,7 @@ app = FastAPI()
 frontend_url = os.getenv('FRONTEND_URL',"http://localhost:3000")
 logging.basicConfig(level=logging.INFO)
 logging.info(f"Allowed frontend URL: {frontend_url}")
-origins=[frontend_url,
+origins=[frontend_url,"http://127.0.0.1:3000","http://localhost:3001",
          'chrome-extensions://neobfeaageldckcenkpcfihbjkfkngcb',]
 app.add_middleware(    
     CORSMiddleware,

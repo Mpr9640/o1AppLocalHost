@@ -192,7 +192,7 @@ async def login(user: UserLogin, response: Response, db: Session = Depends(get_d
         secure=False,
         path = '/',
         #samesite="lax",  #"none", which is not used to accept for only samw port and domain.
-        samesite='Lax',
+        samesite='none',
         max_age= JWT_EXPIRATION_MINUTES*60,
     )
     response.set_cookie(

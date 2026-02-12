@@ -6,6 +6,8 @@ const Dotenv = require('dotenv-webpack');
 
 module.exports = {
   entry: {
+    contentscript: './extension/scripts/contentscript.js',
+    atswatchers: './extension/scripts/atswatchers.js',
     background: './extension/background.js',
     autofill: './extension/scripts/autofill.js',
     offscreen: './extension/offscreen/offscreen.js',
@@ -17,6 +19,8 @@ module.exports = {
   output: {
     filename: (pathData) => {
       const name = pathData.chunk.name;
+      if(name === 'contentscript') return 'contentscript.bundle.js';
+      if(name === 'atswatchers') return 'atswatchers.bundle.js';
       if (name === 'background') return 'background.bundle.js';
       if (name === 'autofill')   return 'autofill.bundle.js';
       if (name === 'resumechecking')  return 'resumechecking.bundle.js';

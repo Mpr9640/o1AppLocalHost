@@ -29,7 +29,7 @@ let CLIENT_TAXONOMY = new Set([
   // Tools
   "linux","git","github","gitlab","bitbucket","postman","swagger","openapi","vscode","intellij","jira","confluence",
   // Soft/other (select, not all)
-  "agile","scrum","kanban","leadership","project management","collaboration","organization","technical design","control systems","public health"
+  "agile","scrum","kanban","supervision","overtime","leadership","project management","collaboration","organization","technical design","control systems","public health"
 ]);
 
 // Canonical synonyms (short, human forms — no weird expansions)
