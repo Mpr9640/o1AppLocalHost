@@ -2,7 +2,7 @@ import { safeURL, debounce, waitForDomStable } from "./contentscript/core/utils.
 import { isLinkedInHost } from "./contentscript/core/hosts.js";
 
 import { showIcon, requestShowIcon } from "./contentscript/icon/showIcon.js";
-import { teardownJobAidUI } from "./contentscript/icon/teardownUi.js";
+import { requestRemoveIcon, teardownJobAidUI } from "./contentscript/icon/teardownUi.js";
 
 import {
   initApplyClickMonitor,
@@ -15,7 +15,7 @@ import { getJobDescriptionText } from "./contentscript/Jobpage/meta/jd/jdMain.js
 import { displayMatchingPerecentage } from "./contentscript/Jobpage/meta/jd/jdDisplaying.js";
 
 import { detectJobPage } from "./contentscript/Jobpage/detection.js";
-import { runDetectionNow, currentJobKey, jdAnchorEl } from "./contentscript/scanandRunDetection.js";
+import { runDetectionNow } from "./contentscript/scanandRunDetection.js";
 
 import { hasApplySignals } from "./contentscript/Jobpage/findingHelpers.js";
 
@@ -24,8 +24,8 @@ import { getCompanyName } from "./contentscript/Jobpage/meta/jobcompany/jobCompa
 import { getLocationText } from "./contentscript/Jobpage/meta/joblocation/jobLocationMain.js";
 import { getCompanyLogoUrl } from "./contentscript/Jobpage/meta/jobicon/jobIconMain.js";
 
-import { getLinkedInActiveCardMeta, lastActiveLIMeta } from "./contentscript/Jobpage/meta/linkedin/linkedIn.js";
-import { getGenericActiveCardMeta, lastActiveGenericMeta } from "./contentscript/Jobpage/meta/generichostslists/genericHostsLists.js";
+import { getLinkedInActiveCardMeta} from "./contentscript/Jobpage/meta/linkedin/linkedIn.js";
+import { getGenericActiveCardMeta } from "./contentscript/Jobpage/meta/generichostslists/genericHostsLists.js";
 
 import { initAutofillReentry } from "./contentscript/reAutofill.js";
 import { IS_TOP_WINDOW, ROLE_PARSE } from "./contentscript/icon/position.js";
@@ -186,15 +186,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   if (request.action === 'JA_RENDER_ICON_TOP') {
     if (!IS_TOP_WINDOW) return;
-    showIcon();
+    requestShowIcon;
   }
   
   if (request.action === 'JA_REMOVE_ICON_TOP') {
-    removeIcon?.();
+    requestRemoveIcon?.();
   }
 
   if (request.action === 'forceScanNow') {
-    (async () => { try{await runDetectionNow(); sendResponse?.({ ok: true, jobKey: currentJobKey, url: location.href });} catch(e){sendResponse?.({ ok: false, error: String(e?.message || e), url: location.href });}})();
+    (async () => { try{await runDetectionNow(); sendResponse?.({ ok: true, jobKey: JA_STATE.currentJobKey, url: location.href });} catch(e){sendResponse?.({ ok: false, error: String(e?.message || e), url: location.href });}})();
     return true;
   }
   
@@ -301,12 +301,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     waitForDomStable({ timeoutMs: 2500, quietMs: 180 });
     const meta = { url: location.href, title: getJobTitleStrict(), company: getCompanyName(), location: getLocationText(), logoUrl: getCompanyLogoUrl() };
     //console.log('2. In contentscript.js getskillmatchstate percentage,matchedwords and allskills:',percentage,matchedWords,allSkills);
-    sendResponse?.({ percentage, matchedWords, allSkills, meta, jobKey: currentJobKey });
+    sendResponse?.({ percentage: JA_STATE.percentage, matchedWords:JA_STATE.matchedWords, allSkills: JA_STATE.allSkills, meta, jobKey: JA_STATE.currentJobKey });
     return;// true;
   }
 
   if (request.action === 'getActiveLinkedInMeta') {
-    const fresh = isLinkedInHost() ? (getLinkedInActiveCardMeta() || lastActiveLIMeta) : null;
+    const fresh = isLinkedInHost() ? (getLinkedInActiveCardMeta() || JA_STATE.lastActiveLIMeta) : null;
     sendResponse?.(fresh || null);
     return;// true;
   }
@@ -314,8 +314,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     //const fresh = (!isLinkedInHost()) ? (getGenericActiveCardMeta() || lastActiveGenericMeta) : (getLinkedInActiveCardMeta() || lastActiveLIMeta) : null;
     // This structure correctly handles the ternary operator.
     const fresh = (!isLinkedInHost()) 
-      ? (getGenericActiveCardMeta() || lastActiveGenericMeta || null) 
-      : (getLinkedInActiveCardMeta() || lastActiveLIMeta || null);
+      ? (getGenericActiveCardMeta() || JA_STATE.lastActiveGenericMeta || null) 
+      : (getLinkedInActiveCardMeta() || JA_STATE.lastActiveLIMeta || null);
     sendResponse?.(fresh || null);
     return;// true;
   }

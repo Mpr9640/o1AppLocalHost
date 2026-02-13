@@ -150,7 +150,7 @@ function initAutofillReentry(deps = {}) {
 
     const callInit = async () => {
       try {
-        const mod = await import(url);
+        const mod = await import(/* webpackIgnore: true */ url);
         if (mod?.autofillInit) {
           window.__JA_busyAutofill = true;
           pauseDetections(250);

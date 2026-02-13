@@ -1,6 +1,5 @@
 import { IS_TOP_WINDOW } from "./position.js";
 import { __ja_rateLimit } from "./showIcon.js";
-import { resetContentState } from "../contentscript";
 import { JA_STATE,resetAllState } from "../core/state.js";
 
 

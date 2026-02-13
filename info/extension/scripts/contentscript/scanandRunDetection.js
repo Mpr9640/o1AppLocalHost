@@ -4,7 +4,7 @@ import { isGlassDoorHost, isLinkedInHost } from "./core/hosts.js";
 import { detectJobPage } from "./Jobpage/detection.js";
 import { getJobDescriptionText } from "./Jobpage/meta/jd/jdMain.js";
 
-import { computeStableJobKey, getLinkedInActiveCardMeta } from "./Jobpage/meta/linkedin/linkedIn.js";
+import { computeStableJobKey, getLinkedInActiveCardMeta,expandLinkedInDescription } from "./Jobpage/meta/linkedin/linkedIn.js";
 import { bindGenericListClicks, getGenericActiveCardMeta } from "./Jobpage/meta/generichostslists/genericHostsLists.js";
 
 import { getJobTitleStrict } from "./Jobpage/meta/jobtitle/jobTitle.js";
@@ -16,7 +16,7 @@ import { requestShowIcon } from "./icon/showIcon.js";
 import { maybeRefreshApplied } from "./icon/menu/applied.js";
 import { teardownJobAidUI } from "./icon/teardownUi.js";
 
-
+import { IS_TOP_WINDOW, ROLE_PARSE } from "./icon/position.js";
 
 // if removeBanner/removeIcon live in icon modules, import them from there
 import { requestRemoveIcon } from "./icon/teardownUi.js";
@@ -32,16 +32,20 @@ import { JA_STATE, resetContentState } from "./core/state.js";
 async function scan(det) {
   // compute stable job key once per page/job
   const newKey = await computeStableJobKey();
+  //console.log('In scan checkeing stable key',newKey);
   if (newKey && newKey !== JA_STATE.currentJobKey) {
     JA_STATE.currentJobKey = newKey;
     //lastJDHash = ""; matchedWords = []; allSkills = [];
+    console.log('In scan removing banner due to stable key',newKey);
     resetContentState();
-    removeBanner();
+    //removeBanner();
   }
-
+  //console.log('In scan, before showing icon checkings allowUi,jobapplication detected parameters:',det.allowUI,JA_STATE.jobApplicationDetected)
   // Icon state
   if (det.allowUI && !JA_STATE.jobApplicationDetected) {
     //showIcon();
+
+    //console.log('we are entered into the scan function to show icon'); 
     requestShowIcon(det);
     JA_STATE.jobApplicationDetected = true;
   }
@@ -52,10 +56,11 @@ async function scan(det) {
   if (!det.allowUI) {
     requestRemoveIcon();
   }
-  await maybeRefreshApplied();
-  // NO need to Expand collapsed descriptions on sites like LinkedIn
-  //expandLinkedInDescription();
-  
+  await maybeRefreshApplied();  // where we are using to update the icon applied dot. 
+  // need to Expand collapsed descriptions on sites like LinkedIn
+  if(isLinkedInHost){
+    expandLinkedInDescription();
+  }
 
   // JD extraction (guarded)
   if (!ROLE_PARSE) return { text: "", anchor: null, source: "none" };
@@ -69,10 +74,10 @@ async function scan(det) {
   const urlKey = location.href.split('#')[0];
   //We are skipping url check for glassdoor because , eventhough the job was changed, the url is being same.
   if (isGlassDoorHost() || !JA_STATE._didFullJDForUrl.has(urlKey)) {
-    console.log('In scan we are going to call job descripton');
+    //console.log('In scan we are going to call job descripton');
     const { text, anchor, source } = await getJobDescriptionText(det);
     if (text && text.length > 120) {
-      console.log('Entered in to the inside to send jd to the background')
+      //console.log('Entered in to the inside to send jd to the background')
       JA_STATE._didFullJDForUrl.add(urlKey);
       JA_STATE.jdAnchorEl = anchor || null;
       const h = hash(text);
@@ -80,7 +85,7 @@ async function scan(det) {
       if (h !== JA_STATE.lastJDHash) {
         JA_STATE.lastJDHash = h;
         console.log('The jd sending to background is:',text);
-        chrome.runtime.sendMessage({ action: "jdText", text, jobKey: JA_STATE.currentJobKey, source, tier: det.tier });
+        chrome.runtime.sendMessage({ action: "jdText", text:text, jobKey: JA_STATE.currentJobKey, source, tier: det.tier });
       }
     }
   }
@@ -115,10 +120,10 @@ let __JA_lastUrl = location.href;
 async function runDetectionNow() {
   try {
     const det = await detectJobPage(); // single detection pass
-    console.log('In run detection after detection:',det);
+    //console.log('In run detection after detection:',det);
     const curUrl = location.href;
-    console.log('In rundet the current location:',curUrl);
-    console.log('In rundet the ja location:',__JA_lastUrl); 
+    //console.log('In rundet the current location:',curUrl);
+    //console.log('In rundet the ja location:',__JA_lastUrl); 
     if (curUrl !==__JA_lastUrl) {
       teardownJobAidUI("url_changed");
     }
@@ -132,7 +137,7 @@ async function runDetectionNow() {
       teardownJobAidUI("detector_disallowed");
       return;
     }
-    console.log('We are passed in rundetection, sending to scan func ');
+    //console.log('We are passed in rundetection, sending to scan func ');
     // If URL hasn't changed and the tab is in background, you can early return (optional).
     // const cur = location.href;
     // if (document.hidden && cur === __JA_lastUrl) return;

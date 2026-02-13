@@ -73,6 +73,7 @@ function getLinkedInLogoUrl() {
   return '';
 }
 function expandLinkedInDescription() {
+  
   ['.show-more-less-html__button','button[aria-expanded="false"][data-control-name*="show"]',
    'button[aria-label*="show more" i]','button[aria-label*="see more" i]']
    .forEach(sel => document.querySelectorAll(sel).forEach(btn => { if (isVisible(btn)) { try { btn.click(); } catch {} } }));

@@ -19,8 +19,7 @@ import { collectJDFromJSONLD } from "./jsonld/jsonldMain.js";
 import { collectJDBySelectors } from "./jdSelectors.js";
 import { collectJDByHeadings } from "./jdbyHeadings.js";
 import { cleanJDText, stripLabelishLines, scoreJDText } from "./jdHelpers.js";
-
-
+import { IS_TOP_WINDOW, ROLE_PARSE } from "../../../icon/position.js";
 //Function to merger job description if it was splitted into different heading blocks
 function mergeCandidateTexts(cands, maxLen = 24000) {
   const seen = new Set(); const parts = []; let total = 0;

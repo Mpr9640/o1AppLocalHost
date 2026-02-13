@@ -17,6 +17,7 @@ function __ja_rateLimit(ms = 600) {
 }
 function requestShowIcon(det = null) {
   if (IS_TOP_WINDOW) {
+    console.log('In request show icon going to call show icon main ');
     showIcon(); // render locally (top only)
     return;
   }
@@ -163,7 +164,7 @@ function showIcon() {
     hideMenu();
     try {
       const bundleURL = chrome.runtime.getURL('autofill.bundle.js');
-      const mod = await import(bundleURL);
+      const mod = await import(/* webpackIgnore: true */ bundleURL);
       if (mod?.autofillInit) {
         const { autofillData = null } = await chrome.storage.local.get('autofillData');
         window.__JA_busyAutofill = true;

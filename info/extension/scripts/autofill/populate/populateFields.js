@@ -9,7 +9,8 @@ import {
   isGreenhouseHost,
   isSuccessEuHost,
   isLeverHost,
-  isCheckwritersrecruitHost
+  isCheckwritersrecruitHost,
+  isWorkdayHost
 } from '../utils.js';
 
 import { fillInput } from './fillInput.js';

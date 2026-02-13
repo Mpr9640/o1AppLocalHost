@@ -1,4 +1,4 @@
-import { allSkills } from "../../../core/state.js";
+import { JA_STATE } from "../../../core/state.js";
 
 /* ==== skills banner kept as-is except gated by allowUI ==== */
 //For Ashby we are using different code for inserting because the existing code is making the banner disapper because of ashby dom nodes being reset.
@@ -6,7 +6,7 @@ function displayMatchingPerecentage(pct, matched) {
 
   //if (!ROLE_PARSE) return; // banner only in the parsing context
 
-  if (!Array.isArray(allSkills) || allSkills.length === 0) return;
+  if (!Array.isArray(JA_STATE.allSkills) || JA_STATE.allSkills.length === 0) return;
 
   const hostId = 'jobAidSkillBannerHost';
   let host = document.getElementById(hostId);
@@ -87,7 +87,7 @@ function displayMatchingPerecentage(pct, matched) {
   const matchList = host.shadowRoot.getElementById('matchList');
   const unmatchList = host.shadowRoot.getElementById('unmatchList');
 
-  const jd = Array.isArray(allSkills) ? allSkills : [];
+  const jd = Array.isArray(JA_STATE.allSkills) ? JA_STATE.allSkills : [];
   const mset = new Set((matched || []).map(x => (x || '').toLowerCase()));
   const unmatched = jd.filter(x => !mset.has((x || '').toLowerCase()));
 

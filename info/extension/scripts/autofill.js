@@ -75,9 +75,14 @@ document.head.appendChild(style);
 
 //===Autofill
 let autofillData = null;
+let __JA_pauseUntil = 0;
+function pauseDetections(ms = 1200) {
+  __JA_pauseUntil = Math.max(__JA_pauseUntil, performance.now() + ms);
+}
+
 //STEP O (AUTOFILLINIT)
 let preKeys;
-let AUTOFILL_ACTIVE = false;
+//let AUTOFILL_ACTIVE = false;
 async function autofillInit(tokenOrData, arg2 = null) {
   window.__JA_busyAutofill = true;
   //if(AUTOFILL_ACTIVE)  return;
