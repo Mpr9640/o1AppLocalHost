@@ -46,15 +46,6 @@ async function computeStableJobKey() {
     const canonical = resp?.canonical || location.href;
     if (canonical) return canonical; // use canonical URL as the job key
   } catch {}
-
-  // Fallback: title+company+activeId OR pathname hashed (stable enough per flow)
-  //const u = new URL(window.location.href);
-  const u = safeURL(window.location.href);
-  const activeId = getActiveCardId(); // linkeidn active job id
-  const title = (findJobTitleEl()?.textContent || '').trim();
-  const company = (getCompanyName() || '').trim();
-  const raw = [u.hostname, activeId || u.pathname, title, company].filter(Boolean).join(' | ');
-  return raw || u.origin + u.pathname;
 }
 
 function getLinkedInLogoUrl() {
@@ -211,7 +202,7 @@ function getLinkedInActiveCardMeta() {
          || '';
   }
 
-  const canonicalUrl = jobId ? `https://www.linkedin.com/jobs/view/${jobId}/` : location.href;
+  const canonicalUrl =  location.href; //jobId ? `https://www.linkedin.com/jobs/view/${jobId}/` :
   const logoUrl = getLinkedInLogoUrl();
   const meta = { title, company: companyName, location: locationText, logoUrl, url: canonicalUrl, jobId, atsVendor: 'linkedin' };
   JA_STATE.lastActiveLIMeta = meta;

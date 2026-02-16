@@ -65,6 +65,7 @@ function getCanonicalSnapshot(canonicalUrl) {
     return canonicalStore.find(x => x.url === canonicalUrl) || null;
 }
 
+console.log('In canon.js the canonical info found:',canonicalStore);
 export {
   canonicalStore,
   MAX_CANONICALS,

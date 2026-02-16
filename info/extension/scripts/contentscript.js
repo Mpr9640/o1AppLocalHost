@@ -80,7 +80,6 @@ function shouldPauseDetections(){
   else{console.log('we got autofill as Inactive');return false};
 
 }
-let AUTOFILL_ACTIVE = false;
 
 async function refreshAutofillState() {
   try {
@@ -191,6 +190,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   
   if (request.action === 'JA_REMOVE_ICON_TOP') {
     requestRemoveIcon?.();
+  }
+  if (request?.action === "JA_REFRESH_APPLIED_TOP") {
+    const { jobKey, url } = request.payload || {};
+    // Only top should do this
+    maybeRefreshApplied(window.__JobAidIconEl, { jobKey, url });
   }
 
   if (request.action === 'forceScanNow') {
@@ -330,6 +334,32 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return;// true;
   }
 });
+
+/* =========================
+   9) Submit-click → inject atswatchers.bundle.js on demand
+   ========================= */
+const SUBMIT_TEXT_RX = /\b(submit|submit application|send application|finish|confirm|complete application|final submit)\b/i;
+const SUBMIT_SELECTORS = 'button, input[type="submit"], a, [role="button"]';
+
+(function installSubmitClickWatcher() {
+  if (window.__JA_submitWatcher__) return;
+  window.__JA_submitWatcher__ = true;
+
+  document.addEventListener('click', (e) => {
+    // Walk up from the click target to find a matching submit element
+    const el = e.target.closest(SUBMIT_SELECTORS);
+    if (!el) return;
+
+    const text = (el.textContent || el.value || el.getAttribute('aria-label') || '').trim();
+    if (!SUBMIT_TEXT_RX.test(text)) return;
+
+    // Already injected? Skip.
+    if (window.__JobAidATSWatchers__) return;
+
+    // Ask background to programmatically inject atswatchers.bundle.js
+    chrome.runtime.sendMessage({ action: 'injectATSWatchers' }).catch(() => {});
+  }, { capture: true, passive: true });
+})();
 
 /***********************************************
  * contentscript.js — Autofill re-entry watcher

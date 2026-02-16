@@ -22,6 +22,7 @@ import { getCompanyLogoUrl } from "../Jobpage/meta/jobicon/jobIconMain.js";
  *
  * Dependencies are injected to avoid circular imports and keep this reusable.
  */
+/*
 function initApplyClickMonitor(deps) {
   const {
     hasTitleCompanyLocation,
@@ -34,7 +35,7 @@ function initApplyClickMonitor(deps) {
     sendJourneyStart,
     noteFirstJobUrl,
     getUrl = () => location.href,
-    getClickLabel = (el) => (el.textContent || el.value || "").trim(),
+    getClickLabel = (el) => (el.getAttribute?.("aria-label") || el.textContent || el.value || "").trim(),
     APPLY_RX = /(apply|i['’]?\s*m\s+interested|begin application|start application)/i,
   } = deps || {};
 
@@ -43,7 +44,7 @@ function initApplyClickMonitor(deps) {
   }
 
   const handler = async (e) => {
-    const el = e.target?.closest?.("a,button,input[type=submit]");
+    const el = e.target?.closest?.('a,button,input[type="submit"],[role="button"],[role="link"]');
     if (!el) return;
 
     const label = getClickLabel(el);
@@ -76,6 +77,83 @@ function initApplyClickMonitor(deps) {
   // Optional: return a cleanup function (useful for debugging / hot reload)
   return () => document.removeEventListener("click", handler, { capture: true });
 }
+*/function initApplyClickMonitor(deps) {
+  const {
+    hasTitleCompanyLocation,
+    getJobDescriptionText,
+    canonicalScore,
+    getJobTitleStrict,
+    getCompanyName,
+    getLocationText,
+    getCompanyLogoUrl,
+    sendJourneyStart,
+    noteFirstJobUrl,
+    getUrl = () => location.href,
+    getClickLabel = (el) =>
+      (el.getAttribute?.("aria-label") || el.textContent || el.value || "").trim(),
+    APPLY_RX = /\b(easy\s+apply|quick\s+apply|apply\s+now|apply|begin\s+application|start\s+application|i['’]?\s*m\s+interested)\b/i,
+  } = deps || {};
+
+  if (!hasTitleCompanyLocation || !getJobDescriptionText || !canonicalScore) {
+    throw new Error("initApplyClickMonitor: missing required deps");
+  }
+
+  // one-shot guard (prevents multiple journeyStart on multi-step flows)
+  let started = false;
+
+  async function buildSnapshotFallback() {
+    const hasApply = true;
+    const hasTCL = !!hasTitleCompanyLocation();
+    const { text: jdText } = (await getJobDescriptionText()) || {};
+    const hasJD = !!(jdText && jdText.length > 120);
+    const score = canonicalScore({ hasApply, hasTCL, hasJD });
+
+    return {
+      title: getJobTitleStrict?.() || "",
+      company: getCompanyName?.() || "",
+      location: getLocationText?.() || "",
+      logoUrl: getCompanyLogoUrl?.() || "",
+      url: getUrl(),
+      score,
+    };
+  }
+
+  const handler = async (e) => {
+    if (started) return;
+
+    const el = e.target?.closest?.(
+      'a,button,input[type="submit"],[role="button"],[role="link"]'
+    );
+    if (!el) return;
+
+    const label = getClickLabel(el);
+    if (!APPLY_RX.test(label)) return;
+
+    started = true;
+
+    // still lock the first canonical url early
+    try { await noteFirstJobUrl?.(getUrl()); } catch {}
+
+    // 1) Start journey WITHOUT snapshot (background should use jobCtxByTab)
+    let resp = null;
+    try {
+      resp = await sendJourneyStart?.(); // <-- no snapshot
+    } catch {}
+
+    // 2) If background says no ctx for this tab, fallback to snapshot extraction
+    if (!resp?.ok && resp?.needSnapshot) {
+      try {
+        const snap = await buildSnapshotFallback();
+        try { await sendJourneyStart?.(snap); } catch {}
+      } catch {}
+    }
+  };
+
+  document.addEventListener("click", handler, { capture: true, passive: true });
+
+  return () => document.removeEventListener("click", handler, true);
+}
+
 
 // ---- Canonical scoring (40/30/30) ----
 function canonicalScore({ hasApply, hasTCL, hasJD }) {

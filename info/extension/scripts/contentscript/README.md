@@ -103,9 +103,38 @@ contentscript.js: export {
   refreshAutofillStateOnce, runDetection,allSkills
 };
 
+overview:
+1. finding the job page, extracting the jd(text) and sending that text to bakground, background making api call, if response was received using that response, otherwise doing offline skill matching.
+checkings: url verification making keeping the banner for same url matching and hashing the jd,chekcing the hashed jd to avoid extracting again the same text doing other process.
+2. After jd, if it is a **linkedin** than it is finding the active job card and sending that job card to backend with an action **liactivejobcard**, backend saving that **meta** in **liactivemetabytab**
+3. For all hosts, we are pushing the data into **jobctxBytab**.
+4.Here after finding meta, we are sending **updatejobcontext** action with meta , url ,confidence to background and background is saving that data in **jobctxByTab** map. 
+5. in **jobctxByTab**, we are using **first_canonical** as either the first seen url or canonical, because first seen will be only comes after the user clicks on apply, at that time we are taking that url as first url.
+6.When the apply click was happend than we are sending a message to background with ac action **journeystart** and it is getting the meta need from jobctxbytab and saving that data into journeytab with **ajid**. const journeysByTab = new Map(); // tabId -> { activeAjid, items: Map<ajid, Journey> }
+7. After that we are pushing that in to **canonical** where it saves complete meta as, 
+  url: snap.url,
+  title: norm(snap.title) || 'Unknown',
+  company: norm(snap.company) || '',
+  location: norm(snap.location) || '',
+  logo_url: snap.logoUrl || null,
+  started_at: Date.now(),
+  ajid: ajid || null,
+  submitted_at:
+8. Jjourneys by tab will hold all the journeys happend for that particular tab, it will auto run when page refresh or push state/ replace state. I mean back and next. items hold, ajid and snap,..
+
+9.
+
+**Popupcard**:
+1. In popup, it is making a request to send a jobctx for present tab id, the background looking for **jobctxbytab** and returing the data in that map.
+**const jobCtxByTab = new Map(); // tabId -> { canonical, first_canonical, meta, updated_at, confidence }**
 
 
-
+issues to fix in the morning.
+1. Need to check the applied url for every 3 secs.
+2. in popup, canonical page detection is going wrong. Need to update with solution like in contentcript when detection was trure tha we can set on what based it was set like on jd(we will treat as start page) and show the regular page data otherwise page hourney data. 
+3. In detectiong, we are not taking scoring of jd for allowUI.
+4. first canonical url will not set until he clicks on apply, we are taking this reference to showcard in popup.
+5.in popup finding the present page details is being good. but show card is being set to false where unable to show card.
 
 
 

@@ -56,10 +56,9 @@ async function getJobDescriptionText(det = null) {
   //For Taleo host , we are skipping all the prechecks to extract jd from page.
   if(isTaleoHost && window.location.pathname.includes('jobdetail')){
     text = document.body.innerText;
-    console.log('THe text is for taleo',text);
+    //console.log('THe text is for taleo',text);
     return { text: text, anchor: document.body, source: 'jsonld' };
   }
-
   if (!ROLE_PARSE) return { text: "", anchor: null, source: "none" };
   // early bailout in top window
   /*

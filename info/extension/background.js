@@ -27,7 +27,6 @@ import {
   preferCtxCanonical
 } from './background/jobjourney/journeybyTab.js';
 import {
-  newAjid,
   proxyToPrimaryFrame
 } from './background/frames/iframeHandling.js';
 import {
@@ -46,7 +45,7 @@ import {
 import { extractSkillsHybrid } from './background/taxonomy/skillsExtraction.js';
 import {processJDViaBackendWithFallback} from './background/taxonomy/skillsApi.js';
 
-const API_BASE_URL =process.env.REACT_APP_BACKEND_URL || 'http://localhost:8000'; // or your prod base
+
 import {
   extractSkillCandidates,
   getUserSkillsSet,
@@ -59,8 +58,8 @@ import {
 
 
 
-
-
+const API_BASE_URL =process.env.REACT_APP_BACKEND_URL || 'http://localhost:8000'; // or your prod base
+function newAjid() { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
 /* =================== Per-tab LI meta cache (unchanged) =================== */
 const liActiveMetaByTab = new Map();
 const autofillActiveByTab = new Map();
@@ -86,6 +85,23 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return;
       }
       */
+      // Programmatically inject atswatchers when content script detects submit click
+      if (request.action === 'injectATSWatchers') {
+        const tabId = sender?.tab?.id;
+        if (!tabId) { sendResponse?.({ ok: false, error: 'no tab' }); return; }
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId, allFrames: true },
+            files: ['atswatchers.bundle.js'],
+          });
+          sendResponse?.({ ok: true });
+        } catch (e) {
+          console.warn('[bg] injectATSWatchers failed:', e);
+          sendResponse?.({ ok: false, error: String(e?.message || e) });
+        }
+        return;
+      }
+
       if (request?.action === "setAutofillActive") {
         const tabId = sender?.tab?.id;
         if( tabId != null){
@@ -120,16 +136,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         chrome.tabs.sendMessage(tabId, { action: 'JA_REMOVE_ICON_TOP' }, { frameId: 0 })
           .catch(() => {});
       }
+      // pseudo: wherever you forward show icon
+      if (request.action === "JA_REFRESH_APPLIED_TOP") {
+        chrome.tabs.sendMessage(sender.tab.id, request); // or target frame 0 if you do frame routing
+      }
       // NEW: lock in first canonical seen when UI first appears
       if (request.action === 'noteFirstJobUrl') {
         const tabId = sender.tab?.id;
         const canon = canonicalJobUrl(request.url || sender?.url || '');
         if (tabId && canon) {
           const cur = jobCtxByTab.get(tabId) || { canonical: canon, first_canonical: canon, meta: {}, confidence: 0 };
-          if (!cur.first_canonical) cur.first_canonical = canon;
+          //if (!cur.first_canonical) 
+          cur.first_canonical = canon;
           if (!cur.canonical) cur.canonical = canon;
           cur.updated_at = Date.now();
           jobCtxByTab.set(tabId, cur);
+          console.log('final job context after notingdown first canonical in background listener:',jobCtxByTab);
           sendResponse?.({ ok: true, first: cur.first_canonical });
         } else sendResponse?.({ ok: false });
         return;
@@ -141,6 +163,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const canonical = canonicalJobUrl(request.canonical || sender.url || request.url || '');
         const meta = request.meta || {};
         const confidence = typeof request.confidence === 'number' ? request.confidence : 0.8;
+        console.log('I received for updating job meta in jobcontext by tab map:',meta);
         const ctx = updateCtx(tabId, canonical, meta, confidence);
         sendResponse?.({ ok: true, ctx });
         return;
@@ -232,7 +255,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           const labels = Array.isArray(request.labels) ? request.labels : [];
           const answer = String(request.answer || '');
           const r = await callOffscreen('offscreen.bestMatch', { labels, answer });
-          console.log('[bg] ML r value in background', r);
+          //console.log('[bg] ML r value in background', r);
           sendResponse(r || { ok:false });
         })();
         return true; // <-- IMPORTANT
@@ -268,6 +291,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         //return;
         return true; // keep sendResponse alive (async)
       }
+      /*
       if (request.action === 'journeyStart') {
         const tabId = sender.tab?.id;
         const snap = request?.snapshot || {};
@@ -281,7 +305,47 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         sendResponse?.({ ok: true, ajid });
         return;
+      }*/
+      if (request.action === "journeyStart") {
+        const tabId = sender.tab?.id;
+        if (!tabId) { sendResponse?.({ ok: false }); return; }
+
+        // 1) Prefer existing ctx stored by tabId
+        const ctx = jobCtxByTab.get(tabId); // { canonical, first_canonical, meta, confidence, updated_at }
+        const ctxUrl = ctx?.canonical || ctx?.first_canonical || "";
+
+        // 2) Fallback: allow snapshot from content script
+        const snapFromReq = request?.snapshot || null;
+
+        // Build snapshot from background ctx if present
+        const snapFromCtx = ctxUrl
+          ? {
+              url: ctxUrl,
+              ...(ctx?.meta || {}),
+              confidence: ctx?.confidence ?? 0,
+              updated_at: ctx?.updated_at ?? Date.now(),
+            }
+          : null;
+
+        const snap = snapFromCtx || snapFromReq;
+
+        // If neither ctx nor request provided a usable url, ask for snapshot
+        if (!snap?.url) {
+          sendResponse?.({ ok: false, needSnapshot: true });
+          return;
+        }
+
+        const ajid = newAjid();
+        upsertJourney(tabId, ajid, { snapshot: { ...snap }, active: true });
+        const bag = getBag(tabId);
+        if (bag) bag.activeAjid = ajid;
+
+        pushCanonicalSnapshot(snap, ajid);
+        console.log('The data going to put in canonical store in background listneres:',snap,ajid);
+        sendResponse?.({ ok: true, ajid, source: snapFromCtx ? "jobCtxByTab" : "request.snapshot" });
+        return;
       }
+
       if (request.action === 'journeyBindCanonical') {
         const tabId = sender.tab?.id;
         if (!tabId) { sendResponse?.({ ok:false }); return; }
@@ -419,6 +483,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             company_logo_url: finalSnapshot.logoUrl || null,
             applied_at: when,
         };
+        console.log('The data sending to backedn when submission was happend:',body);
         try {
           const res = await apiClient.post('/api/jobs', body, { withCredentials: true });
           //await rememberAppliedInstant(primary, res?.data?.applied_at || when);
@@ -572,6 +637,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse?.({ ok: true });
         return;
       }
+      /*
       if (request.action === 'checkAppliedForUrl') {
         const reqCanon = canonicalJobUrlCached(preferCtxCanonical(sender, request.url || ''));
         try {
@@ -629,6 +695,70 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
         return;
       }
+      */
+      if (request.action === "checkAppliedForUrl") {
+        const tabId = sender?.tab?.id;
+        let reqCanon;
+        if(request.case === "regular"){
+          reqCanon = request.url;
+        }
+        if(!reqCanon){
+          // Prefer canonical from ctx (or fallback to request.url)
+          reqCanon = canonicalJobUrlCached(preferCtxCanonical(sender, request.url || ""));
+        }
+        // Pull TCL from request OR from jobCtxByTab meta
+        const ctx = tabId != null ? jobCtxByTab.get(tabId) : null;
+        const meta = ctx?.meta || {};
+
+        const title = String(request.title || meta.title || "").trim();
+        const company = String(request.company || meta.company || "").trim();
+        const location = String(request.location || meta.location || "").trim();
+        console.log('In checkapplied url the url and meta going to check:',reqCanon,meta);
+        try {
+          // 0) TCL fast-path (now works even if CS sends nothing)
+          if (title && company) {
+            const map = await getTclMap();
+            const iso = map[tclKey({ title, company, location })];
+            if (iso) {
+              sendResponse({ ok: true, applied_at: iso, canonical: reqCanon, match: "tcl_map" });
+              return;
+            }
+          }
+
+          // 1) local instant (URL) - use canonical
+          const instant = await getInstantApplied(reqCanon || "");
+          if (instant) {
+            sendResponse({ ok: true, applied_at: instant, canonical: reqCanon, match: "url_instant" });
+            return;
+          }
+
+          // 2) backend fallback: match by canonical URL OR TCL
+          const { data } = await apiClient.get("/api/jobs", { withCredentials: true });
+          const canon = (u) => canonicalJobUrlCached(u || "") || "";
+
+          const hitByUrl = (data || []).find(j => canon(j.url) === reqCanon);
+
+          let hitByTcl = null;
+          if (!hitByUrl && title && company) {
+            const wanted = tclKey({ title, company, location });
+            hitByTcl = (data || []).find(j =>
+              tclKey({ title: j.title, company: j.company, location: j.location }) === wanted
+            );
+          }
+
+          const hit = hitByUrl || hitByTcl;
+          sendResponse({
+            ok: true,
+            applied_at: hit?.applied_at || null,
+            canonical: reqCanon,
+            match: hitByUrl ? "backend_url" : (hitByTcl ? "backend_tcl" : "none")
+          });
+        } catch (e) {
+          sendResponse({ ok: false, error: e?.response?.data?.detail || e.message || "lookup failed" });
+        }
+        return true; // IMPORTANT for async sendResponse in MV3
+      }
+
 
       // 👇 NEW: Gemma suggestions
       if (request.type === 'GEMMA_SUGGEST') {
@@ -814,8 +944,11 @@ chrome.tabs.onUpdated.addListener((tabId, info) => { if (info.status === 'loadin
 
 setInterval(fetchDataFromBackend, 3 * 60 * 1000);
 console.log('Background service worker initialized.');
+console.log('In background jobCtxByTab:', jobCtxByTab);
+
 
 export {
+  newAjid,
   API_BASE_URL,
   liActiveMetaByTab,
   autofillActiveByTab,

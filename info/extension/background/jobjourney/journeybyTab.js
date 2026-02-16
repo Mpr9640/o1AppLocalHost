@@ -1,12 +1,12 @@
 import { canonicalJobUrl } from '../canonandapplied/canon.js';
 import { scoreMeta, nonEmptyMerge } from '../canonandapplied/utils.js';
 //Journeys 
- const jobCtxByTab = new Map(); // tabId -> { canonical, first_canonical, meta, updated_at, confidence }
+const jobCtxByTab = new Map(); // tabId -> { canonical, first_canonical, meta, updated_at, confidence }
 const journeysByTab = new Map(); // tabId -> { activeAjid, items: Map<ajid, Journey> }
 function getBag(tabId){ return journeysByTab.get(tabId) || null; }
 //Function to get the entire tab journey of present tabID. if none found, create a new map with ajid as active
 function upsertJourney(tabId, ajid, patch) {
-  const bag = journeysByTab.get(tabId) || { activeAjid: ajid, items: new Map() }; //getting bag based on tab
+  const bag = getBag(tabId) || { activeAjid: ajid, items: new Map() }; //getting bag based on tab
   const cur = bag.items.get(ajid) || { ajid, status: 'pending', started_at: Date.now(), seen: new Set(), last_event_at: Date.now(), snapshot: null }; //exploring bag with ajid
   const next = { ...cur, ...patch, last_event_at: Date.now() }; //merges existing journey data with new info. and records last event
   bag.items.set(ajid, next);
@@ -15,7 +15,7 @@ function upsertJourney(tabId, ajid, patch) {
   return next;
 }
 //Function to create a new info if not present for tabId
-    function updateCtx(tabId, canonical, meta, confidence = 0.8) {
+function updateCtx(tabId, canonical, meta, confidence = 0.8) {
     const prev = jobCtxByTab.get(tabId);
     const canon = canonical || prev?.canonical || null;//1.
 
@@ -51,8 +51,8 @@ function upsertJourney(tabId, ajid, patch) {
         const pick =  ctx?.first_canonical || ctx?.canonical || reqUrl ||  sender?.url || '';
         return canonicalJobUrl(pick);
     } catch { return canonicalJobUrl(reqUrl || sender?.url || ''); }
-    }
-
+}
+console.log('In journeybytab jbyTab:',journeysByTab);
 export {
   jobCtxByTab,
   journeysByTab,

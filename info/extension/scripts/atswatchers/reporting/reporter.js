@@ -37,7 +37,7 @@ export async function reportSuccess() {
     } catch {}
 
     const applied_at = new Date().toISOString();
-
+     console.log('In atswatchers going to report success.');
     // Let background bind source platform via referrer (e.g., LinkedIn -> ATS)
     const subres = await sendBg({
       action: 'submissionDetected',

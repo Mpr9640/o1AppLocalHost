@@ -1,5 +1,5 @@
 import { ATS_HOSTS_RX } from '../core/utils.js';
-function newAjid() { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
+
 
 //For better iframes
 // ---------- Primary-frame selector (works on any host) ----------
@@ -59,7 +59,6 @@ async function proxyToPrimaryFrame(tabId, innerMessage, timeoutMs = 2000) {
 }
 
 export {
-  newAjid,
   getAllFramesSafe,
   findPrimaryFrameId,
   sendToFrame,

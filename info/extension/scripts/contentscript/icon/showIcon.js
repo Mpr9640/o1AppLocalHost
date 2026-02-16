@@ -192,7 +192,7 @@ function showIcon() {
   window.__JobAidIconEl = icon;
 
   // Initial applied-state fetch + badge render
-  updateAppliedUI(icon);
+  updateAppliedUI(icon,);
 
   // Keep badge following the icon if you drag/scroll/resize
   window.addEventListener('scroll', () => syncAppliedBadgePosition(icon), { passive: true });

@@ -1,4 +1,8 @@
 import { sendBg } from "../../core/utils.js";
+import { JA_STATE } from "../../core/state.js";
+import { IS_TOP_WINDOW } from "../position.js";
+let __JA_appliedPollId = null;
+let __JA_appliedPollBusy = false;
 // Minimal toast (used when clicking the green badge)
 function showJobAppliedToast(appliedAt) {
   const txt = appliedAt ? `Applied before: ${new Date(appliedAt).toLocaleString()}` : 'Not applied yet';
@@ -33,6 +37,7 @@ function showJobAppliedToast(appliedAt) {
 }
 
 // ------- APPLIED BADGE (GREEN DOT) -------
+let __JA_lastAppliedKey = ""; // NEW (instead of only canonical URL)
 let __jobAidAppliedBadge =  null;
 let __jobAidAppliedAt = null;
 let __JA_lastAppliedCanonical = "";
@@ -80,44 +85,91 @@ function setAppliedBadgeVisible(visible, appliedAt, iconEl) {
     b.style.display = 'none';
   }
 }
-async function updateAppliedUI(iconEl, opts = {}) {
-  //console.log('1. updateapplied entered ');
-  const icon = iconEl || window.__JobAidIconEl;
+async function updateAppliedUI(iconEl) {
+  console.log('1. updateapplied entered ');
+  const icon = iconEl || window.__JobAidIconEl || document.getElementById("jobAidIcon");
   if (!icon) return;
   try {
-    const canonical = opts.canonical|| location.href  ;
+   // const jobKey = opts.jobKey || ""; // NEW
+    //const canonical = opts.canonical|| location.href  ;
+    const canonical = location.href;
     //console.log('in updateappliedai the url sending to backgrounf for cheking',canonical);
     // For now, purely URL-based. No title/company/location (can add later).
     const resp = await sendBg({
       action: 'checkAppliedForUrl',
-      url: canonical
+      url: canonical,
+      case: 'regular'
+      //jobKey // OPTIONAL: safe to include even if bg ignores for now
     });
     const appliedAt = resp?.applied_at || null;
-    console.debug('2. updateapplied appliedstauts',appliedAt);
+    console.debug('2. updateapplied appliedstauts and url',appliedAt,canonical);
     setAppliedBadgeVisible(!!appliedAt, appliedAt, icon);
+    //__JA_lastAppliedKey = jobKey || url; // NEW
     __JA_lastAppliedCanonical = canonical;
-  } catch {
-    console.debug('3. updateapplied error');
+  } catch(error){
+    console.debug('3. updateapplied error',error);
     setAppliedBadgeVisible(false, null, icon);
   }
 }
 
-async function maybeRefreshApplied(iconEl) {
-  //console.log('1. maybe refresh entered ');
-  const icon = iconEl || window.__JobAidIconEl;
+async function maybeRefreshApplied(iconEl,opts={}) {
+  console.log('1. maybe refresh entered ');
+  const icon = iconEl || window.__JobAidIconEl||document.getElementById("jobAidIcon");
   if (!icon) return;
   const canonical = location.href;
+  console.log('in applied checking that present url is same as last one',canonical === __JA_lastAppliedCanonical);
+
   if (canonical === __JA_lastAppliedCanonical) {
-    //console.debug('2. may be refresh break due to same url');
+    console.debug('2. may be refresh break due to same url');
     return;
   }
-  //console.debug('3. may be refresh different ulr triggering update func',canonical);
+  /*
+  const url = opts.url || location.href;
+  const jobKey = opts.jobKey || "";              // NEW
+  const key = jobKey || url;                     // NEW
+  if (key === __JA_lastAppliedKey) return;       // NEW
+  await updateAppliedUI(icon, { url, jobKey });  // NEW */
+
+  console.debug('3. may be refresh different ulr triggering update func',canonical);
   await updateAppliedUI(icon, { canonical });
+}
+
+function ensureAppliedPollStarted() {
+  if (__JA_appliedPollId) return;
+  __JA_appliedPollId = setInterval(async () => {
+    try {
+      if (__JA_appliedPollBusy) return;
+      if (!window.__JobAidIconEl) return;               // icon not shown
+      if (!JA_STATE?.jobApplicationDetected) return;    // not on job page UI
+
+      __JA_appliedPollBusy = true;
+      /*
+      await maybeRefreshApplied(window.__JobAidIconEl, {
+        jobKey: JA_STATE.currentJobKey,
+        url: location.href
+      }); */
+      await maybeRefreshApplied();
+    } finally {
+      __JA_appliedPollBusy = false;
+    }
+  }, 4000); // 3–5 seconds (pick 4000ms)
+}
+function requestRefreshAppliedTop(payload) {
+  if (IS_TOP_WINDOW) return false; // no need
+  try {
+    chrome.runtime.sendMessage({
+      action: "JA_REFRESH_APPLIED_TOP",
+      payload
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // Exports
 export {
   showJobAppliedToast, ensureAppliedBadge, syncAppliedBadgePosition, setAppliedBadgeVisible,
-  updateAppliedUI, maybeRefreshApplied,
-  __jobAidAppliedBadge, __jobAidAppliedAt, __JA_lastAppliedCanonical
+  updateAppliedUI, maybeRefreshApplied,ensureAppliedPollStarted,requestRefreshAppliedTop,
+  __jobAidAppliedBadge, __jobAidAppliedAt, __JA_lastAppliedKey, __JA_lastAppliedCanonical
 };

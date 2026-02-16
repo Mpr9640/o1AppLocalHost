@@ -13,7 +13,7 @@ import { getLocationText } from "./Jobpage/meta/joblocation/jobLocationMain.js";
 import { getCompanyLogoUrl } from "./Jobpage/meta/jobicon/jobIconMain.js";
 
 import { requestShowIcon } from "./icon/showIcon.js";
-import { maybeRefreshApplied } from "./icon/menu/applied.js";
+import { maybeRefreshApplied,ensureAppliedPollStarted,requestRefreshAppliedTop } from "./icon/menu/applied.js";
 import { teardownJobAidUI } from "./icon/teardownUi.js";
 
 import { IS_TOP_WINDOW, ROLE_PARSE } from "./icon/position.js";
@@ -22,6 +22,9 @@ import { IS_TOP_WINDOW, ROLE_PARSE } from "./icon/position.js";
 import { requestRemoveIcon } from "./icon/teardownUi.js";
 
 import { JA_STATE, resetContentState } from "./core/state.js";
+
+import { pushJobContext } from "./jobcontext/jobContext.js";
+
 
 
 
@@ -34,9 +37,7 @@ async function scan(det) {
   const newKey = await computeStableJobKey();
   //console.log('In scan checkeing stable key',newKey);
   if (newKey && newKey !== JA_STATE.currentJobKey) {
-    JA_STATE.currentJobKey = newKey;
-    //lastJDHash = ""; matchedWords = []; allSkills = [];
-    console.log('In scan removing banner due to stable key',newKey);
+    JA_STATE.currentJobKey = newKey;   // Nothing but location.href
     resetContentState();
     //removeBanner();
   }
@@ -48,20 +49,37 @@ async function scan(det) {
     //console.log('we are entered into the scan function to show icon'); 
     requestShowIcon(det);
     JA_STATE.jobApplicationDetected = true;
+    ensureAppliedPollStarted(); // NEW
   }
   else if(det.allowUI) {
+    ensureAppliedPollStarted(); // NEW
     // optional: keep it silent; your log currently spams
     // console.log('Icon was displayed already');
   }
   if (!det.allowUI) {
     requestRemoveIcon();
   }
-  await maybeRefreshApplied();  // where we are using to update the icon applied dot. 
+  //await maybeRefreshApplied(window.__JobAidIconEl);  // where we are using to update the icon applied dot. 
+  const payload = { jobKey: JA_STATE.currentJobKey, url: location.href };
+  if (IS_TOP_WINDOW) {
+    await maybeRefreshApplied(window.__JobAidIconEl, payload);
+  } else {
+    // iframe: ask top to refresh
+    requestRefreshAppliedTop(payload);   // we are checking if is not top window than we are setting the page to top.
+  }
+
+  /*
+  await maybeRefreshApplied(window.__JobAidIconEl, {
+    jobKey: JA_STATE.currentJobKey,
+    url: location.href
+  });
+  */
   // need to Expand collapsed descriptions on sites like LinkedIn
+  /*
   if(isLinkedInHost){
     expandLinkedInDescription();
   }
-
+  */
   // JD extraction (guarded)
   if (!ROLE_PARSE) return { text: "", anchor: null, source: "none" };
 

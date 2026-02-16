@@ -55,8 +55,7 @@
         "<all_urls>"
       ],
       "js": [
-        "contentscript.bundle.js",
-        "atswatchers.bundle.js"
+        "contentscript.bundle.js"
       ],
       "run_at": "document_idle",
       "all_frames": true,

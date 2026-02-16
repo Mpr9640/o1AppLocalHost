@@ -46,6 +46,7 @@ async function detectJobPage() {
   console.log('hasJD:',hasJD);
   console.log('ats:',ats);
 
+  //why we are not considering jd score 
   const schemaScore = schemaFound ? 1.2 : 0;
   const hostScore   = knownHost   ? 0.8 : 0;
   const formScore   = hasApply    ? 0.8 : 0;

@@ -57,28 +57,28 @@ async function rememberAppliedTcl(meta, iso) {
   await setTclMap(map);
 }
 async function persistApplied({ title, company, location, url, logo_url, source = 'extension', applied_at }, sender) {
-const canonical = canonicalJobUrlCached(preferCtxCanonical(sender, url));
-const when = applied_at || new Date().toISOString();
+  const canonical = canonicalJobUrlCached(preferCtxCanonical(sender, url));
+  const when = applied_at || new Date().toISOString();
 
-const body = {
-    title: title || 'Unknown',
-    company: company || '',
-    location: location || '',
-    url: canonical,
-    status: 'applied',
-    source,
-    company_logo_url: logo_url || null,
-    applied_at: when
-};
+  const body = {
+      title: title || 'Unknown',
+      company: company || '',
+      location: location || '',
+      url: canonical,
+      status: 'applied',
+      source,
+      company_logo_url: logo_url || null,
+      applied_at: when
+  };
 
-const res = await apiClient.post('/api/jobs', body, { withCredentials: true });
-const savedAt = res?.data?.applied_at || when;
+  const res = await apiClient.post('/api/jobs', body, { withCredentials: true });
+  const savedAt = res?.data?.applied_at || when;
 
-await rememberAppliedInstant(canonical, savedAt);
-await rememberAppliedTcl(body, savedAt);
-removeCanonical(canonical);
+  await rememberAppliedInstant(canonical, savedAt);
+  await rememberAppliedTcl(body, savedAt);
+  removeCanonical(canonical);
 
-return { res, canonical, savedAt };
+  return { res, canonical, savedAt };
 }
 
 export {

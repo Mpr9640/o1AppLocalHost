@@ -22,6 +22,7 @@ import {
  */
 export async function looksLikeSuccessPage() {
   const ctx = await getCtx();
+  console.log('In ats watchers the context received:',ctx);
   const activeCanonUrl = ctx?.first_canonical || ctx?.canonical || '';
   const href = location.href;
   const title = document.title || '';
