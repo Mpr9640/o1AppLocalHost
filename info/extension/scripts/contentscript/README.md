@@ -130,13 +130,57 @@ checkings: url verification making keeping the banner for same url matching and 
 
 
 issues to fix in the morning.
-1. Need to check the applied url for every 3 secs.
+
 2. in popup, canonical page detection is going wrong. Need to update with solution like in contentcript when detection was trure tha we can set on what based it was set like on jd(we will treat as start page) and show the regular page data otherwise page hourney data. 
 3. In detectiong, we are not taking scoring of jd for allowUI.
 4. first canonical url will not set until he clicks on apply, we are taking this reference to showcard in popup.
 5.in popup finding the present page details is being good. but show card is being set to false where unable to show card.
+**Workflow**:
+**Layer1**. Detects job page, find active job, extracts and save that data in jobctxByTab Map by calling pushjobcontext function.
+meta = {title: getJobTitleStrict(),
+          company: getCompanyName(),
+          location: getLocationText(),
+          logoUrl: getCompanyLogoUrl(),
+          url: location.href,
+          jobKey: JA_STATE.currentJobKey
+        }
+canonical: meta.url
+**pushJobContext(meta, { confidence: det.tier === 'high' ? 1.0 : 0.7 });** -> message(**({ action: 'updateJobContext', canonical, meta, confidence }, resolve)**) -> in background **updateCtx(tabId, canonical, meta, confidence);** -> updateCtx returns
+jobCtxByTab.set(tabId, {
+  canonical: canon,
+  first_canonical: canon || prev?.first_canonical || null, //  we are keeping present url as main because in same tab multi job listing , if we use previous one may be lead to prevouse job url
+  meta: { ...meta },
+  updated_at: Date.now(),
+  confidence
+  });
+  return jobCtxByTab.get(tabId);
+
+**Layer2**: Detect when user clicks on apply button, freeze that url ,job meta,create a id and save that in journeysByTab map.
+
+when click was happend, than 
+1. it will send a message to backend to note down that specific job url(location.href). and in background, it updates only first_canonical in jobctxByTab map.
+noteFirstJobUrl: (url) => chrome.runtime.sendMessage({ action: "noteFirstJobUrl", url }),
+2. It will send journeystart message. without snap(meta)-> background get it from jobCtxByTab using tabId.
+2.1 if no data found in jobctxByTab map than , it will build snap and send again the journeystart message.
+3. After we have meta, than it will create a id(ajId, which is a ranom number with date.now) and calls a function **upsertJourney(tabId, ajid, { snapshot: { ...snap }, active: true });**.
+4.  Here snapshot includes every parameter in jobctxByTab map except first_canonical becuase we are keeping just canonical.
+const journeysByTab = new Map(); // tabId -> { activeAjid, items: Map<ajid, Journey> } it is map(items) inside map.
+5. upsert journey functioning with example,
+tabId(whole class) -> activeAjid(present student id) -> items(reprent his journey from LKG to His Higher study with classname(ajid) and each ajid had his acomplishments. )
+5.1 it checks wether the journeysByTab had the tabId,
+5.1.1 if it does not had tabId, than it will create a new data(activeAjid,items(new map)) for that new tabId.
+5.1.2 it will add journey= {ajid,status: 'pending', started_at: Date.now(), seen: new Set(), last_event_at: Date.now(), snapshot: null } to that items map.
+5.1.3 it will add that journey to that items map with ajid as key.
+5.1.4 it will keeps up adding more journey to the existing tabId with same activeAjid and also with same ajid but journey.
 
 
+
+
+
+Checklist: 
+1. find active job and extract meta and save it in jobctxByTab Map.   
+Ans: Done
+2. Detect when user clicks on apply button, freeze that url ,job meta,create a id and save that in journeysByTab map.
 
 
 

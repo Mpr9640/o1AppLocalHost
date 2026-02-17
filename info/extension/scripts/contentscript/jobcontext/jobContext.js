@@ -77,7 +77,8 @@ function initApplyClickMonitor(deps) {
   // Optional: return a cleanup function (useful for debugging / hot reload)
   return () => document.removeEventListener("click", handler, { capture: true });
 }
-*/function initApplyClickMonitor(deps) {
+*/
+function initApplyClickMonitor(deps) {
   const {
     hasTitleCompanyLocation,
     getJobDescriptionText,
@@ -90,17 +91,16 @@ function initApplyClickMonitor(deps) {
     noteFirstJobUrl,
     getUrl = () => location.href,
     getClickLabel = (el) =>
-      (el.getAttribute?.("aria-label") || el.textContent || el.value || "").trim(),
+      (el.textContent || el.value || el.getAttribute?.("aria-label") || "").trim(),
     APPLY_RX = /\b(easy\s+apply|quick\s+apply|apply\s+now|apply|begin\s+application|start\s+application|i['’]?\s*m\s+interested)\b/i,
   } = deps || {};
 
-  if (!hasTitleCompanyLocation || !getJobDescriptionText || !canonicalScore) {
+  /*if (!hasTitleCompanyLocation || !getJobDescriptionText || !canonicalScore) {
     throw new Error("initApplyClickMonitor: missing required deps");
-  }
+  } */
 
   // one-shot guard (prevents multiple journeyStart on multi-step flows)
   let started = false;
-
   async function buildSnapshotFallback() {
     const hasApply = true;
     const hasTCL = !!hasTitleCompanyLocation();
@@ -117,12 +117,11 @@ function initApplyClickMonitor(deps) {
       score,
     };
   }
-
   const handler = async (e) => {
     if (started) return;
 
     const el = e.target?.closest?.(
-      'a,button,input[type="submit"],[role="button"],[role="link"]'
+      'a[href],button,input[type="submit"],[role="button"],[role="link"]','[tabindex]:not([tabindex="-1"])','oc-button'
     );
     if (!el) return;
 
@@ -132,13 +131,13 @@ function initApplyClickMonitor(deps) {
     started = true;
 
     // still lock the first canonical url early
-    try { await noteFirstJobUrl?.(getUrl()); } catch {}
+    try { await noteFirstJobUrl?.(getUrl()); } catch(e){console.log('when sent first canonical got an error:',e)};
 
     // 1) Start journey WITHOUT snapshot (background should use jobCtxByTab)
     let resp = null;
     try {
       resp = await sendJourneyStart?.(); // <-- no snapshot
-    } catch {}
+    } catch(e){console.log('when we sent a journey start got an error:',e)};
 
     // 2) If background says no ctx for this tab, fallback to snapshot extraction
     if (!resp?.ok && resp?.needSnapshot) {
@@ -170,6 +169,7 @@ function hasTitleCompanyLocation() {
   const l = (getLocationText() || '').trim();
   return !!(t && c && l);
 }
+/*
 const bindPageToJourney = debounce(async () => {
   try {
     const hasApply = hasApplySignals();
@@ -185,10 +185,45 @@ window.addEventListener('popstate', bindPageToJourney, { passive: true }); // ch
 window.addEventListener('hashchange', bindPageToJourney, { passive: true }); // In url, when the text after # is changed.
 
 
+const bindPageToJourney = debounce(async () => {
+  try {
+    const hasApply = hasApplySignals();
+    const hasTCL = hasTitleCompanyLocation();
+
+    const { text: jdText } = await getJobDescriptionText();
+    const hasJD = !!(jdText && jdText.length > 120);
+
+    const score = canonicalScore({ hasApply, hasTCL, hasJD });
+
+    chrome.runtime.sendMessage({
+      action: "journeyBindCanonical",
+      canonical: `${location.origin}${location.pathname}`, // ✅ normalized
+      href: location.href,
+      host: location.hostname,
+      score
+    });
+  } catch {}
+}, 250);
+
+window.addEventListener("load", bindPageToJourney, { once: true });
+window.addEventListener("popstate", bindPageToJourney, { passive: true });
+window.addEventListener("hashchange", bindPageToJourney, { passive: true });
+
+// Optional but recommended: SPA pushState/replaceState support
+(function hookHistory() {
+  const fire = () => window.dispatchEvent(new Event("locationchange"));
+  const { pushState, replaceState } = history;
+
+  history.pushState = function (...args) { const r = pushState.apply(this, args); fire(); return r; };
+  history.replaceState = function (...args) { const r = replaceState.apply(this, args); fire(); return r; };
+
+  window.addEventListener("locationchange", bindPageToJourney, { passive: true });
+})();
+*/
 async function pushJobContext(meta, { confidence = 0.8 } = {}) {
   try {
     const resp = await new Promise((resolve) => {
-      chrome.runtime.sendMessage({ action: 'canonicalizeUrl', url: location.href }, resolve);
+      chrome.runtime.sendMessage({ action: 'canonicalizeUrl', url: meta.url || location.href }, resolve);
     });
     const canonical = resp?.canonical || location.href;
     await new Promise((resolve) => {

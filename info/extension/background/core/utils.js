@@ -36,7 +36,11 @@ function safeHttpUrl(u) {
   } catch {}
   return null;
 }
-
+function hasGoodMeta(meta) {
+  if (!meta) return false;
+  const tcl = [meta.title, meta.company, meta.location].filter(Boolean).length;
+  return tcl >= 2; // or use scoreMeta(meta) >= 0.6
+}
 export {
   ATS_HOSTS_RX,
   PLATFORM_HOSTS_RX,
@@ -46,5 +50,6 @@ export {
   norm,
   sanitizeTitle,
   timeout,
-  safeHttpUrl
+  safeHttpUrl,
+  hasGoodMeta
 };

@@ -24,7 +24,13 @@ import {
   getBag,
   upsertJourney,
   updateCtx,
-  preferCtxCanonical
+  preferCtxCanonical,//new starting
+  journeysByAjid,
+  activeAjidByJobKey,
+  jobKeyFromSnap,
+  normalizeUrl,
+  journeysByTab,
+  maybeSetApplyUrl
 } from './background/jobjourney/journeybyTab.js';
 import {
   proxyToPrimaryFrame
@@ -32,6 +38,7 @@ import {
 import {
   norm,
   sanitizeTitle,
+  hasGoodMeta,
   timeout,
   isPlatform
 } from './background/core/utils.js';
@@ -143,7 +150,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       // NEW: lock in first canonical seen when UI first appears
       if (request.action === 'noteFirstJobUrl') {
         const tabId = sender.tab?.id;
-        const canon = canonicalJobUrl(request.url || sender?.url || '');
+        const canon = request.url || sender?.url || '';
         if (tabId && canon) {
           const cur = jobCtxByTab.get(tabId) || { canonical: canon, first_canonical: canon, meta: {}, confidence: 0 };
           //if (!cur.first_canonical) 
@@ -160,7 +167,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       if (request.action === 'updateJobContext') {
         const tabId = sender.tab?.id;
         if (!tabId) { sendResponse?.({ ok:false, error: 'no tab' }); return; }
-        const canonical = canonicalJobUrl(request.canonical || sender.url || request.url || '');
+        const canonical = request.canonical || sender.url || request.url || '';
         const meta = request.meta || {};
         const confidence = typeof request.confidence === 'number' ? request.confidence : 0.8;
         console.log('I received for updating job meta in jobcontext by tab map:',meta);
@@ -312,7 +319,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         // 1) Prefer existing ctx stored by tabId
         const ctx = jobCtxByTab.get(tabId); // { canonical, first_canonical, meta, confidence, updated_at }
-        const ctxUrl = ctx?.canonical || ctx?.first_canonical || "";
+        const ctxUrl = ctx?.first_canonical || ctx?.canonical || "";
 
         // 2) Fallback: allow snapshot from content script
         const snapFromReq = request?.snapshot || null;
@@ -330,22 +337,92 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const snap = snapFromCtx || snapFromReq;
 
         // If neither ctx nor request provided a usable url, ask for snapshot
-        if (!snap?.url) {
-          sendResponse?.({ ok: false, needSnapshot: true });
+        if (!snap?.url && !hasGoodMeta(snap)) {
+          sendResponse?.({ ok: false, needSnapshot: true, reason: !snap?.url ? "no-url" : "weak-meta"  });
           return;
         }
+        //New
+        const openerTabId = sender.tab?.openerTabId;
+        const jobKey = jobKeyFromSnap(snap);
+        const thisUrl = normalizeUrl(sender.url || snap.url || "");
+        // A) adopt from opener tab active journey if present
+        let adoptAjid = null;
+        if (openerTabId) {
+          const openerBag = getBag(openerTabId);
+          if (openerBag?.activeAjid) adoptAjid = openerBag.activeAjid;
+        }
 
-        const ajid = newAjid();
-        upsertJourney(tabId, ajid, { snapshot: { ...snap }, active: true });
+        // B) fallback dedupe by jobKey
+        if (!adoptAjid && jobKey) {
+          adoptAjid = activeAjidByJobKey.get(jobKey) || null;
+        }
+
+        if (adoptAjid) {
+          const journey = journeysByAjid.get(adoptAjid);
+          if (journey) {
+            // attach this tab to the same AJID
+            const bag = getBag(tabId) || { activeAjid: adoptAjid, items: new Map() };
+            bag.activeAjid = adoptAjid;
+            bag.items.set(adoptAjid, journey);
+            journeysByTab.set(tabId, bag);
+
+            // remember this url in seen (optional)
+            journey.seen.add(normalizeUrl(thisUrl));
+            maybeSetApplyUrl(journey, thisUrl);
+
+            sendResponse?.({ ok: true, ajid: adoptAjid, source: openerTabId ? "adoptedFromOpener" : "dedupByJobKey" });
+            return true;
+          }
+        }
+
+        // New complted.
+
+        const ajid = newAjid(); //  it is a ranom number with merge of date.now
+        const journey = upsertJourney(tabId, ajid, { snapshot: { ...snap }, start_url: startUrl,
+          apply_url: null,
+          jobKey, active: true });
+        journey.seen.add(startUrl);
         const bag = getBag(tabId);
         if (bag) bag.activeAjid = ajid;
-
+        // record dedupe key
+        if (jobKey) activeAjidByJobKey.set(jobKey, ajid);
+        
         pushCanonicalSnapshot(snap, ajid);
         console.log('The data going to put in canonical store in background listneres:',snap,ajid);
         sendResponse?.({ ok: true, ajid, source: snapFromCtx ? "jobCtxByTab" : "request.snapshot" });
         return;
       }
+      if (request.action === "journeyBindCanonical") {
+        const tabId = sender.tab?.id;
+        if (!tabId) { sendResponse?.({ ok: false }); return true; }
 
+        const bag = getBag(tabId);
+        if (!bag?.activeAjid) {
+          sendResponse?.({ ok: true, note: "no-active" });
+          return true;
+        }
+
+        const ajid = bag.activeAjid;
+        const canonical = request.canonical || sender.url || "";
+        const score = Number(request.score || 0);
+
+        const cur = upsertJourney(tabId, ajid, {});
+
+        const u = normalizeUrl(canonical);
+        if (u) cur.seen.add(u);
+
+        // ensure start_url exists from journeyStart snapshot
+        cur.start_url = cur.start_url || normalizeUrl(cur.snapshot?.url || "");
+
+        // set apply_url only once
+        maybeSetApplyUrl(cur, canonical, score);
+
+        bag.items.set(ajid, cur);
+
+        sendResponse?.({ ok: true, ajid, start_url: cur.start_url, apply_url: cur.apply_url });
+        return true;
+      }
+      /*
       if (request.action === 'journeyBindCanonical') {
         const tabId = sender.tab?.id;
         if (!tabId) { sendResponse?.({ ok:false }); return; }
@@ -353,7 +430,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (!bag?.activeAjid) { sendResponse?.({ ok:true, note:'no-active' }); return; }
 
         const ajid = bag.activeAjid;
-        const canonical = canonicalJobUrl(request.canonical || sender.url || '');
+        const canonical = request.canonical || sender.url || '';
         const score = Number(request.score || 0);
 
         const cur = upsertJourney(tabId, ajid, {});
@@ -367,6 +444,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse?.({ ok: true });
         return;
       }
+        */
       // New message handler in chrome.runtime.onMessage.addListener(request, sender, sendResponse)
       if (request.action === 'getCanonicalMetadata') {
         const requestedCanon = request.canonicalUrl;
