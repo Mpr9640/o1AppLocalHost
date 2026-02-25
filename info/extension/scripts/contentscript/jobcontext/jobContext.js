@@ -99,8 +99,9 @@ function initApplyClickMonitor(deps) {
     throw new Error("initApplyClickMonitor: missing required deps");
   } */
 
-  // one-shot guard (prevents multiple journeyStart on multi-step flows)
-  let started = false;
+  // per-URL guard: prevents double journeyStart on multi-step flows (same URL),
+  // but resets automatically when the user navigates to a different job (new URL).
+  let startedUrl = null;
   async function buildSnapshotFallback() {
     const hasApply = true;
     const hasTCL = !!hasTitleCompanyLocation();
@@ -118,7 +119,8 @@ function initApplyClickMonitor(deps) {
     };
   }
   const handler = async (e) => {
-    if (started) return;
+    const currentUrl = getUrl();
+    if (startedUrl === currentUrl) return; // same job already started (multi-step modal guard)
 
     const el = e.target?.closest?.(
       'a[href],button,input[type="submit"],[role="button"],[role="link"]','[tabindex]:not([tabindex="-1"])','oc-button'
@@ -128,7 +130,7 @@ function initApplyClickMonitor(deps) {
     const label = getClickLabel(el);
     if (!APPLY_RX.test(label)) return;
 
-    started = true;
+    startedUrl = currentUrl; // lock this URL; resets naturally when URL changes
 
     // still lock the first canonical url early
     try { await noteFirstJobUrl?.(getUrl()); } catch(e){console.log('when sent first canonical got an error:',e)};
@@ -233,4 +235,4 @@ async function pushJobContext(meta, { confidence = 0.8 } = {}) {
 }
 
 // Exports
-export { initApplyClickMonitor, canonicalScore, hasTitleCompanyLocation, bindPageToJourney, pushJobContext };
+export { initApplyClickMonitor, canonicalScore, hasTitleCompanyLocation,pushJobContext };// bindPageToJourney, 

@@ -1,8 +1,6 @@
 import {
-  norm
+  norm,safeUrl, isIndeedHost
 } from '../core/utils.js';
-
-
 /* =================== Canonicalization =================== */
 // Canonical Store (7-cap ring buffer) =====
 const canonicalStore = [];       // most-recent-first
@@ -64,6 +62,51 @@ function getCanonicalSnapshot(canonicalUrl) {
     // for a stored snapshot that matches the given canonical URL.
     return canonicalStore.find(x => x.url === canonicalUrl) || null;
 }
+/**
+ * Extract Indeed job key from any Indeed URL.
+ * Supports: jk, vjk
+ * @param {string|URL} input
+ * @returns {string|null}
+ */
+export function extractIndeedJobKey(input) {
+  const u = typeof input === 'string' ? safeUrl(input) : input;
+  if (!u) return null;
+
+  const jk  = u.searchParams.get('jk');
+  const vjk = u.searchParams.get('vjk');
+
+  return jk || vjk || null;
+}
+
+/**
+ * Convert any Indeed URL to a canonical viewjob URL.
+ * Returns null if job key can't be found.
+ * @param {string|URL} input
+ * @returns {string|null}
+ */
+export function canonicalizeIndeedJobUrl(input) {
+  const jk = extractIndeedJobKey(input);
+  if (!jk) return null;
+
+  // Preserve TLD (indeed.com, indeed.co.uk, indeed.in, etc.)
+  const u = typeof input === 'string' ? safeUrl(input) : input;
+  const origin = u ? u.origin : 'https://www.indeed.com';
+
+  return `${origin}/viewjob?jk=${encodeURIComponent(jk)}`;
+}
+
+/**
+ * Canonicalize if Indeed; otherwise return original string.
+ * Always returns a string (never null).
+ * @param {string} primary
+ * @returns {string}
+ */
+export function canonicalizeIfIndeed(primary) {
+  if (!primary) return '';
+  if (!isIndeedHost(primary)) return primary;
+
+  return canonicalizeIndeedJobUrl(primary) || primary;
+}
 
 console.log('In canon.js the canonical info found:',canonicalStore);
 export {
@@ -75,5 +118,7 @@ export {
   pushCanonicalSnapshot,
   markCanonicalSubmitted,
   removeCanonical,
-  getCanonicalSnapshot
+  getCanonicalSnapshot,
+  //extractIndeedJobKey,
+  //canonicalizeIndeedJobUrl
 };

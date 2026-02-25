@@ -9,7 +9,7 @@ export const SUCCESS_SCORE_THRESHOLD = 0.6;
 // ── URL & body-text success patterns ────────────────────────────
 
 export const URL_SUCCESS_RX =
-  /(thank[\s-]?you|application[-\s]?submit(?:ted)?|submission[-\s]?complete|post-?apply|confirmation|success|applied)/i;
+  /(thank[\s-]?you|application[-\s]?submit(?:ted)?|applicationsubmitted|submission[-\s]?complete|post-?apply|confirmation|success|applied)/i;
 
 export const TEXT_SUCCESS_RX =
   /\b(thank\s+you(?:\s+for\s+applying)?|application\s+(?:submit(?:ted)?|received|complete)|you.?ve\s+applied|submitted\s+successfully)\b/i;

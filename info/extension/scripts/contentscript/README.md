@@ -181,6 +181,8 @@ Checklist:
 1. find active job and extract meta and save it in jobctxByTab Map.   
 Ans: Done
 2. Detect when user clicks on apply button, freeze that url ,job meta,create a id and save that in journeysByTab map.
+Ans: Done
+3. In submission detected need to remove checking bag.items becuase it is avoiding showing canonical chooser.
 
 
 

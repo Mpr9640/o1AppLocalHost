@@ -2,7 +2,8 @@
 import {
   canonicalJobUrl,
   canonicalJobUrlCached,
-  removeCanonical
+  removeCanonical,
+  canonicalizeIfIndeed
 } from './canon.js';
 
 // job journey context (tab-based canonical preference)
@@ -57,7 +58,7 @@ async function rememberAppliedTcl(meta, iso) {
   await setTclMap(map);
 }
 async function persistApplied({ title, company, location, url, logo_url, source = 'extension', applied_at }, sender) {
-  const canonical = canonicalJobUrlCached(preferCtxCanonical(sender, url));
+  const canonical = canonicalizeIfIndeed(canonicalJobUrlCached(preferCtxCanonical(sender, url)));
   const when = applied_at || new Date().toISOString();
 
   const body = {

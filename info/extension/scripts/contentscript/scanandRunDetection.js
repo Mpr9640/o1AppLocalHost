@@ -116,7 +116,7 @@ async function scan(det) {
       pushJobContext({ ...liMeta, jobKey: JA_STATE.currentJobKey }, { confidence: det.tier === 'high' ? 1.0 : 0.7 });
     }
   } else {
-    bindGenericListClicks();
+    /*bindGenericListClicks();
     const generic = getGenericActiveCardMeta();
     const meta = generic && (generic.title || generic.company)
       ? { ...generic, jobKey: JA_STATE.currentJobKey }
@@ -127,7 +127,16 @@ async function scan(det) {
           logoUrl: getCompanyLogoUrl(),
           url: location.href,
           jobKey: JA_STATE.currentJobKey
-        };
+        }; */
+    const meta = {
+      title: getJobTitleStrict(),
+      company: getCompanyName(),
+      location: getLocationText(),
+      logoUrl: getCompanyLogoUrl(),
+      url: location.href,
+      jobKey: JA_STATE.currentJobKey
+    };
+    //console.log('1.The url detected and sending the meta with url is :',url);
     pushJobContext(meta, { confidence: det.tier === 'high' ? 1.0 : 0.7 });
   }
 }

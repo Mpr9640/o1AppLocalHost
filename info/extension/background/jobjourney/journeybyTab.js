@@ -3,14 +3,14 @@ import { scoreMeta, nonEmptyMerge } from '../canonandapplied/utils.js';
 //Journeys 
 const jobCtxByTab = new Map(); // tabId -> { canonical, first_canonical, meta, updated_at, confidence }
 const journeysByTab = new Map(); // tabId -> { activeAjid, items: Map<ajid, Journey> }
+const tabByStartUrl = new Map(); // start_url -> tabId  (lets you look up which tab owns a journey by its start URL)
 function getBag(tabId){ return journeysByTab.get(tabId) || null; }
+
+const activeAjidByJobKey = new Map(); //JobKey -> activeAjid
+const journeysByAjid = new Map(); //Ajid ->journey
 
 //New start
 
-// ✅ global store so AJID is shared across tabs
-export const journeysByAjid = new Map(); // ajid -> Journey
-// ✅ dedupe so same job doesn't start a new journey in a new tab
-export const activeAjidByJobKey = new Map(); // jobKey -> ajid
 export function normalizeUrl(u = "") {
   try {
     const x = new URL(u);
@@ -56,6 +56,7 @@ function upsertJourney(tabId, ajid, patch) {
   }; //exploring bag with ajid
   const next = { ...cur, ...patch, last_event_at: Date.now() }; //merges existing journey data with new info. and records last event
   bag.items.set(ajid, next);
+  journeysByAjid.set(ajid, next); // index by ajid so adoptAjid lookups in journeyStart work
   if (!bag.activeAjid) bag.activeAjid = ajid;
   journeysByTab.set(tabId, bag);
   return next;
@@ -100,12 +101,15 @@ function preferCtxCanonical(sender, reqUrl) {
         return pick;
     } catch { return (reqUrl || sender?.url || ''); }
 }
-console.log('In journeybytab jbyTab:',journeysByTab);
+console.log('1.2 In journeybytab jbyTab:',journeysByTab);
 export {
   jobCtxByTab,
   journeysByTab,
+  tabByStartUrl,
   getBag,
   upsertJourney,
   updateCtx,
-  preferCtxCanonical
+  preferCtxCanonical,
+  journeysByAjid,
+  activeAjidByJobKey
 };

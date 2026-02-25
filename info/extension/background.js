@@ -9,7 +9,8 @@ import {
   pushCanonicalSnapshot,
   markCanonicalSubmitted,
   removeCanonical,
-  getCanonicalSnapshot
+  getCanonicalSnapshot,
+  canonicalizeIfIndeed,
 } from './background/canonandapplied/canon.js';
 import {
   rememberAppliedInstant,
@@ -30,6 +31,7 @@ import {
   jobKeyFromSnap,
   normalizeUrl,
   journeysByTab,
+  tabByStartUrl,
   maybeSetApplyUrl
 } from './background/jobjourney/journeybyTab.js';
 import {
@@ -40,7 +42,7 @@ import {
   sanitizeTitle,
   hasGoodMeta,
   timeout,
-  isPlatform
+  isPlatform,
 } from './background/core/utils.js';
 import {
   callOffscreen,
@@ -170,7 +172,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const canonical = request.canonical || sender.url || request.url || '';
         const meta = request.meta || {};
         const confidence = typeof request.confidence === 'number' ? request.confidence : 0.8;
-        console.log('I received for updating job meta in jobcontext by tab map:',meta);
+        //console.log('I received for updating job meta in jobcontext by tab map:',meta);
         const ctx = updateCtx(tabId, canonical, meta, confidence);
         sendResponse?.({ ok: true, ctx });
         return;
@@ -315,12 +317,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       }*/
       if (request.action === "journeyStart") {
         const tabId = sender.tab?.id;
+        //console.log('0.In journey start we entered in with tabId:',tabId);
         if (!tabId) { sendResponse?.({ ok: false }); return; }
 
         // 1) Prefer existing ctx stored by tabId
         const ctx = jobCtxByTab.get(tabId); // { canonical, first_canonical, meta, confidence, updated_at }
         const ctxUrl = ctx?.first_canonical || ctx?.canonical || "";
-
+      
         // 2) Fallback: allow snapshot from content script
         const snapFromReq = request?.snapshot || null;
 
@@ -333,11 +336,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               updated_at: ctx?.updated_at ?? Date.now(),
             }
           : null;
-
-        const snap = snapFromCtx || snapFromReq;
-
+        
+        let snap;
+        if(snapFromReq){
+          snap = snapFromReq;
+        }
+        if(!snap){
+          snap = snapFromCtx
+        }
+        console.log('1. In journey start The snap using to set for journey start is:',snap);
+        console.log('2. In journey start checking wether the snap has good meta:',hasGoodMeta(snap));
         // If neither ctx nor request provided a usable url, ask for snapshot
-        if (!snap?.url && !hasGoodMeta(snap)) {
+        if (!snapFromReq && (!hasGoodMeta(snap) || !snap?.url) ){ //{&& !hasGoodMeta(snap) && 
           sendResponse?.({ ok: false, needSnapshot: true, reason: !snap?.url ? "no-url" : "weak-meta"  });
           return;
         }
@@ -345,50 +355,52 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const openerTabId = sender.tab?.openerTabId;
         const jobKey = jobKeyFromSnap(snap);
         const thisUrl = normalizeUrl(sender.url || snap.url || "");
+        console.log('3.In journey start the openertabId,jobkey,present url and snap url is:',openerTabId,jobKey,sender.url,snap.url);
         // A) adopt from opener tab active journey if present
         let adoptAjid = null;
         if (openerTabId) {
           const openerBag = getBag(openerTabId);
           if (openerBag?.activeAjid) adoptAjid = openerBag.activeAjid;
+          console.log('1. we set active adoptajid is:',adoptAjid);
         }
 
         // B) fallback dedupe by jobKey
         if (!adoptAjid && jobKey) {
           adoptAjid = activeAjidByJobKey.get(jobKey) || null;
+          console.log('2. we set active adoptajid with the hep of jobkey is:',adoptAjid);
         }
 
         if (adoptAjid) {
           const journey = journeysByAjid.get(adoptAjid);
+          console.log('3. journye we are going to set',journey);
           if (journey) {
             // attach this tab to the same AJID
             const bag = getBag(tabId) || { activeAjid: adoptAjid, items: new Map() };
             bag.activeAjid = adoptAjid;
             bag.items.set(adoptAjid, journey);
             journeysByTab.set(tabId, bag);
-
             // remember this url in seen (optional)
             journey.seen.add(normalizeUrl(thisUrl));
-            maybeSetApplyUrl(journey, thisUrl);
-
+            maybeSetApplyUrl(journey, thisUrl, snap?.score ?? ctx?.confidence ?? 0.8);
+            console.log('4. In journey start,in second apply,the bag is:',journeysByTab.get(tabId));
             sendResponse?.({ ok: true, ajid: adoptAjid, source: openerTabId ? "adoptedFromOpener" : "dedupByJobKey" });
             return true;
           }
         }
 
         // New complted.
-
         const ajid = newAjid(); //  it is a ranom number with merge of date.now
-        const journey = upsertJourney(tabId, ajid, { snapshot: { ...snap }, start_url: startUrl,
+        const journey = upsertJourney(tabId, ajid, { snapshot: { ...snap }, start_url: ctxUrl,
           apply_url: null,
           jobKey, active: true });
-        journey.seen.add(startUrl);
+        journey.seen.add(ctxUrl);
+        if (ctxUrl) tabByStartUrl.set(ctxUrl, tabId); // index start_url -> tabId
         const bag = getBag(tabId);
         if (bag) bag.activeAjid = ajid;
         // record dedupe key
         if (jobKey) activeAjidByJobKey.set(jobKey, ajid);
-        
         pushCanonicalSnapshot(snap, ajid);
-        console.log('The data going to put in canonical store in background listneres:',snap,ajid);
+        console.log('5. In journey start,The data going to put in canonical store in background listneres:',snap,ajid);
         sendResponse?.({ ok: true, ajid, source: snapFromCtx ? "jobCtxByTab" : "request.snapshot" });
         return;
       }
@@ -475,35 +487,46 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return; //true; // Indicates an asynchronous response
       }
 
-      if (request.action === 'submissionDetected') {
-        const tabId = sender.tab?.id;
+      if (request.action === 'submissionDetected') {      
+        const tabId = sender.tab?.id;  
         // Canonicalize both the submission page and the referrer
-        const pageCanon = canonicalJobUrl(request.pageCanonical || sender.url || '');
-        const refCanon  = canonicalJobUrl(request.referrer || '');
+        const pageCanon = request.pageCanonical ||''; // sender.url || 
+        const refCanon  = request.referrer || '';
         // Logic to select the preferred Canonical URL for primary tracking (Platform > ATS)
         //const preferCanon = (refCanon && isPlatform(refCanon)) ? refCanon : pageCanon;
-        const preferCanon = (refCanon)? refCanon : pageCanon
-        if (!tabId || !preferCanon) { sendResponse?.({ ok:false }); return; }
+        let preferCanon;
+        let finalSnapshot = null;
+        preferCanon = (pageCanon)?pageCanon: null;       //setting present pagecanon as main
+        let bag;
+        if(tabId && preferCanon){                        //Getting bag
+          bag = getBag(tabId);
+        }
         // Retrieve the job journey bag based on the SENDER TAB ID (ATS tab)
-        const bag = getBag(tabId);
-        if (!bag || bag.items.size === 0) { sendResponse?.({ ok:false, error:'no-journey' }); return; }
-        // 1. Try to bind to an existing journey in the CURRENT tab's bag
+        if (!bag || bag.items.size === 0) {                                   //No present page bag than choosing ref url bag
+          // Fallback: find the tab whose journey started at refCanon
+          preferCanon = (refCanon)? refCanon : null;
+          const refTabId = refCanon ? tabByStartUrl.get(refCanon) : null;
+          if (refTabId) bag = getBag(refTabId);
+          if (!bag || bag.items.size === 0) { sendResponse?.({ ok: false, error: 'no-journey' }); return; }       //No bag retrn false
+        }
+        if (!tabId || !preferCanon) { sendResponse?.({ ok:false }); return; }          //NO tabId or prefer url return false
+                                                                                       //Try to bind to an existing journey in the CURRENT tab's bag
         let best = Array.from(bag.items.values()).find(j => j.status!=='submitted' && j.seen.has(preferCanon));
         if (!best && bag.activeAjid) best = bag.items.get(bag.activeAjid);
         if (!best) best = Array.from(bag.items.values()).filter(j=>j.status!=='submitted').sort((a,b)=>b.last_event_at-a.last_event_at)[0] || null;
-
         // --------------------------------------------------------------------------------
         // UPDATED LOGIC: Strict Snapshot Priority (Cache -> Current Journey)
-        // --------------------------------------------------------------------------------
-
-        let finalSnapshot = null;
-
-        // PRIORITY 1: Check the global CACHE (canonicalStore) for the referrer's metadata
-        if (refCanon /*&& isPlatform(refCanon)*/) {
-            const cachedSnap = getCanonicalSnapshot(refCanon);
+        // -------------------------------------------------------------------------------
+                                                                       // PRIORITY 2: Fall back to the snapshot found in the current tab's active journey
+        if (!finalSnapshot && best) {
+          finalSnapshot = best.snapshot;
+        }
+                                                                        // PRIORITY 1: Check the global CACHE (canonicalStore) for the referrer's metadata
+        if (preferCanon && !finalSnapshot/*&& isPlatform(refCanon)*/) {
+            const cachedSnap = getCanonicalSnapshot(preferCanon);
             if (cachedSnap) {
                 finalSnapshot = cachedSnap;
-                // If the current best journey exists, update its snapshot to the high-quality cached one.
+                                                                          // If the current best journey exists, update its snapshot to the high-quality cached one.
                 if (best && (!best.snapshot || cachedSnap.score > best.snapshot.score)) {
                   best.snapshot = finalSnapshot;
                   bag.items.set(best.ajid, best);
@@ -511,67 +534,64 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     
             }
         }
-
-        // PRIORITY 2: Fall back to the snapshot found in the current tab's active journey
-        if (!finalSnapshot && best) {
-          finalSnapshot = best.snapshot;
-        }
-        
         // --------------------------------------------------------------------------------
         // Final check for a usable snapshot (from either source)
         // --------------------------------------------------------------------------------
-
+        /*
         if (!finalSnapshot || !finalSnapshot.url) {
           // Fallback to manual chooser if we couldn't derive metadata from the cache or journey
           try { chrome.tabs.sendMessage(sender.tab.id, { action: 'showCanonicalChooser' }); } catch {}
           sendResponse?.({ ok:true, waitForUser: true });
           return;
-        }
-        
+        } */
         // Use the best available snapshot URL for the primary canonical ID
         //const primary = isPlatform(finalSnapshot.url) && preferCanon ? finalSnapshot.url : (preferCanon || finalSnapshot.url);
         const primary = finalSnapshot.url || preferCanon;
+        console.log('The primary url in submission detection is:',primary);
         const when = new Date().toISOString();
-
         // Mark the selected journey as submitted
         if (best) {
           best.status = 'submitted'; 
           best.submitted_at = when;
           bag.items.set(best.ajid, best);
         }
-        
         // --------------------------------------------------------------------------------
         // Mark ALL Canonical URLs as Applied and Remove from Store
         // --------------------------------------------------------------------------------
-
-        const urlsToMark = new Set([primary, refCanon, pageCanon].filter(Boolean));
-
+                                                // Include start_url and apply_url from the journey for marking
+        const journeyStartUrl = best?.start_url || request.start_url || null;
+        const journeyApplyUrl = best?.apply_url || request.apply_url || null;
+        const urlsToMark = new Set([primary, refCanon, pageCanon, journeyStartUrl, journeyApplyUrl].filter(Boolean));
         for (const url of urlsToMark) {
-            markCanonicalSubmitted(url, when); 
+            console.log('4. the url sending to backend in submission detection:',url);
+            markCanonicalSubmitted(url, when);
             removeCanonical(url);
         }
-        // Build the payload using the FINAL SNAPSHOT data
+                                                  // Build the payload using the FINAL SNAPSHOT data
         const body = {
             title: norm(finalSnapshot.title) || 'Unknown',
             company: norm(finalSnapshot.company) || '',
             location: norm(finalSnapshot.location) || '',
-            url: primary, // Always use the determined primary URL
+            //url: primary, // Always use the determined primary URL
+            url: canonicalizeIfIndeed(primary),
             status: 'applied',
             source: 'extension',
             company_logo_url: finalSnapshot.logoUrl || null,
             applied_at: when,
         };
-        console.log('The data sending to backedn when submission was happend:',body);
+        console.log('5.The data sending to backend when submission was happend:',body);
         try {
           const res = await apiClient.post('/api/jobs', body, { withCredentials: true });
-          //await rememberAppliedInstant(primary, res?.data?.applied_at || when);
-          await rememberAppliedInstant(refCanon, res?.data?.applied_at || when);
-          await rememberAppliedInstant(pageCanon, res?.data?.applied_at || when);
-          await rememberAppliedTcl(body, res?.data?.applied_at || when);
-
+          const savedAt = res?.data?.applied_at || when;
+          if(body.url)  await rememberAppliedInstant(body.url,savedAt);
+          if(refCanon)  await rememberAppliedInstant(canonicalizeIfIndeed(refCanon), savedAt);
+          if(pageCanon) await rememberAppliedInstant(canonicalizeIfIndeed(pageCanon), savedAt);
+          if(body)      await rememberAppliedTcl(body, savedAt);
+          // Remember start_url and apply_url from the journey if not null
+          if (journeyStartUrl) await rememberAppliedInstant(canonicalizeIfIndeed(journeyStartUrl), savedAt);
+          if (journeyApplyUrl) await rememberAppliedInstant(canonicalizeIfIndeed(journeyApplyUrl), savedAt);
           // NEW: remove canonical from list immediately after successful send
           //removeCanonical(primary);
-
           /*if (sender.tab?.id) chrome.tabs.sendMessage(sender.tab.id, {
             action: 'appliedJobSaved', ok: true, data: res.data, title: body.title, company: body.company
           }); */
@@ -585,10 +605,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       }
 
       if (request.action === 'getActiveCanonicalSnapshot') {
-        const tabId = sender.tab?.id;
+        let tabId;
+        if(request.referenceUrl){
+          const refTabId = request.referenceUrl ? tabByStartUrl.get(request.referenceUrl) : null;
+          if(refTabId) tabId = refTabId;
+        }
+        if(!tabId)tabId = sender.tab?.id;
         const bag = getBag(tabId);
         const j = bag?.activeAjid ? bag.items.get(bag.activeAjid) : null;
-        sendResponse?.({ ok: true, snapshot: j?.snapshot || null, isActive: !!j });
+        sendResponse?.({ ok: true, snapshot: j?.snapshot || null, isActive: !!j, start_url: j?.start_url || null, apply_url: j?.apply_url || null });
         return;
       }
       if (request.action === 'getCanonicalList') {
@@ -618,7 +643,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             title: norm(snap.title),
             company: norm(snap.company),
             location: norm(snap.location),
-            url: snap.url,
+            url: canonicalizeIfIndeed(snap.url),
             logo_url: snap.logo_url,
             source: 'extension',
             applied_at: new Date().toISOString()
@@ -631,22 +656,29 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       }
       // Apply & remember — ALWAYS key by first_canonical when available (2B)
       // appliedJob / markApplied
-      if (request.type === 'JOB_AID__APPLIED' || request.action === 'appliedJob' || request.action === 'markApplied') {
+      if (request.action === 'appliedJob' || request.action === 'markApplied') {   //appliedJob/Mark applied action
         const p = request.payload || request;
-        const payload = {
+        const payload = {                                            //Building payload from request
           title: sanitizeTitle(p.title),
           company: p.company,
           location: p.location,
-          url: p.canon || p.source_url || p.url,
+          url: canonicalizeIfIndeed(p.url) ||  canonicalizeIfIndeed(p.start_url) || canonicalizeIfIndeed(p.apply_url),
           logo_url: p.logo_url,
           source: p.ats_vendor || 'extension',
           applied_at: p.applied_at
         };
-
+        const pStartUrl = p.start_url || null;
+        const pApplyUrl = p.apply_url || null;
+        const bodyUrl =   p.url || null;
         try {
-          const { res, savedAt, canonical } = await persistApplied(payload, sender);
+          const { res, savedAt, canonical } = await persistApplied(payload, sender);   //sending payload to send to backend
+          // Remember start_url and apply_url if not null
+          if (pStartUrl) await rememberAppliedInstant(pStartUrl, savedAt);             //Remembering all urls
+          if (pApplyUrl) await rememberAppliedInstant(pApplyUrl, savedAt);
+          if(bodyUrl)    await rememberAppliedInstant(bodyUrl, savedAt);  
+
           if (sender.tab?.id) {
-            chrome.tabs.sendMessage(sender.tab.id, { action: 'appliedJobSaved', ok: true, data: res.data, title: payload.title || 'Unknown', company: payload.company || '' });
+            chrome.tabs.sendMessage(sender.tab.id, { action: 'appliedJobSaved', ok: true, data: res.data, title: payload.title || '', company: payload.company || '' });
           }
           sendResponse({ ok: true, data: res.data, applied_at: savedAt, canonical });
           try {
@@ -1017,12 +1049,18 @@ async function sessionClear() {
 }
 
 /* =================== Housekeeping =================== */
-chrome.tabs.onRemoved.addListener((tabId) => { liActiveMetaByTab.delete(tabId); });
+chrome.tabs.onRemoved.addListener((tabId) => {
+  liActiveMetaByTab.delete(tabId);
+  // remove all start_url entries that point to this tab
+  for (const [url, tid] of tabByStartUrl) {
+    if (tid === tabId) tabByStartUrl.delete(url);
+  }
+});
 chrome.tabs.onUpdated.addListener((tabId, info) => { if (info.status === 'loading') liActiveMetaByTab.delete(tabId); });
 
 setInterval(fetchDataFromBackend, 3 * 60 * 1000);
 console.log('Background service worker initialized.');
-console.log('In background jobCtxByTab:', jobCtxByTab);
+//console.log('In background jobCtxByTab:', jobCtxByTab);
 
 
 export {

@@ -4,6 +4,7 @@ const ATS_HOST_MAP = [
   /myworkdayjobs\.com|workday\.com/i, /icims\.com/i, /taleo\.net/i,/successfactors\.eu/i,
   /ashbyhq\.com/i, /smartrecruiters\.com/i, /smartrecruiterscareers\.com/i, /workable\.com/i,
   /bamboohr\.com/i, /jobvite\.com/i, /successfactors\.com/i,/metacareers\.com/i,/paylocity\.com/i,/careers-page\.com/i,
+  /ultipro\.com/i,
 ];
 const KNOWN_JOB_HOSTS = [
   /(^|\.)linkedin\.com$/i, /indeed\.com/i, /dice\.com/i, /glassdoor\.com/i,
@@ -24,8 +25,10 @@ const isGreenhouseHost = /(?:^|\.)greenhouse\.io$/i.test(location.hostname);
 const isAshbyHost = /(?:^|\.)ashbyhq\.com$/i.test(location.hostname);
 const isIcimsHost = /(?:^|\.)icims\.com$/i.test(location.hostname);
 const isTaleoHost = /(?:^|\.)taleo\.net$/i.test(location.hostname);
-function isIndeedHost() {
-  return /(^|\.)indeed\./i.test(location.hostname);
+function isIndeedHost(input) {
+  const u = typeof input === 'string' ? safeUrl(input) : input;
+  if (!u) return false;
+  return /(^|\.)indeed\./i.test(u.hostname);
 }
 function isWorkdayHost() {
   return /(^|\.)myworkdayjobs\.com$/i.test(location.hostname)

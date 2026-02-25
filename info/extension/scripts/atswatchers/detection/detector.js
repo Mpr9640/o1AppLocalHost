@@ -45,9 +45,9 @@ export async function looksLikeSuccessPage() {
   }) ? 1 : 0;
 
   const score =
-    (0.3 * urlHit) +
+    (0.6 * urlHit) +
     (0.3 * textHit) +
-    (0.6 * canonHit) +
+    (0.3 * canonHit) +
     (0.3 * selectorHit);
 
   return Math.min(score, 1) > SUCCESS_SCORE_THRESHOLD;

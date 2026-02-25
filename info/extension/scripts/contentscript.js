@@ -337,7 +337,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 /* =========================
    9) Submit-click → inject atswatchers.bundle.js on demand
-   ========================= */
+   ========================= 
 const SUBMIT_TEXT_RX = /\b(submit|submit application|send application|finish|confirm|complete application|final submit)\b/i;
 const SUBMIT_SELECTORS = 'button, input[type="submit"], a, [role="button"]';
 
@@ -360,7 +360,7 @@ const SUBMIT_SELECTORS = 'button, input[type="submit"], a, [role="button"]';
     chrome.runtime.sendMessage({ action: 'injectATSWatchers' }).catch(() => {});
   }, { capture: true, passive: true });
 })();
-
+*/
 /***********************************************
  * contentscript.js — Autofill re-entry watcher
  * Injects autofill.bundle.js on refresh if a
